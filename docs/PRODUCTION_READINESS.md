@@ -12,7 +12,7 @@ This document tracks the verification status of all external system integration 
 | **Connection Settings** | Shopify API | SYNC | `IMPLEMENTED_UNVERIFIED` | N/A | None | Yes | Considered |
 | **Catalog Onboarding** | Shopify API (onboarding view) | SYNC | `IMPLEMENTED_UNVERIFIED` | N/A | None | Yes | Considered |
 | **Order Webhooks** | Shopify API | SYNC | `IMPLEMENTED_UNVERIFIED` | N/A | None | Yes | Considered |
-| **Order Ingestion** | Shopify API | SYNC | `REAL_VERIFIED` | Passed | Passed (test mock payload) | Yes | Considered |
+| **Order Ingestion** | Shopify API | SYNC | IMPLEMENTED_UNVERIFIED | Passed | None | Yes | Considered |
 | **Outbound Inventory Sync** | Shopify API | SYNC | `STUB` | N/A | None | No | No |
 | **Outbound Price Sync** | Shopify API | SYNC | `STUB` | N/A | None | No | No |
 | **Catawiki Scraper Run** | Apify API | PRICE | `NOT_IMPLEMENTED` | N/A | None | No | No |
@@ -33,49 +33,49 @@ This document tracks the verification status of all external system integration 
 - **Implementation Evidence**: [`src/lib/auth.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/src/lib/auth.ts). Falls back to the admin user `Kristof`'s seed UUID when no session cookie is set in `DEMO` mode. Supabase auth configured but unverified in production environment.
 - **Test Evidence**: [`tests/auth.test.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/tests/auth.test.ts)
 - **Live Evidence**: None. No automated production testing has occurred.
-- **Last Verified Commit**: `e0145f7c32bfd5162a04a6fc24fb7b4df44b4da3`
+- **Last Verified Commit**: None
 
 ### 2. Shopify Connection Settings
 - **Status**: `IMPLEMENTED_UNVERIFIED`
 - **Implementation Evidence**: `testConnection` in [`src/services/marketplace/shopify.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/src/services/marketplace/shopify.ts) executes fetch to `GET /admin/api/2023-07/shop.json`.
 - **Test Evidence**: None.
 - **Live Evidence**: None.
-- **Last Verified Commit**: `e0145f7c32bfd5162a04a6fc24fb7b4df44b4da3`
+- **Last Verified Commit**: None
 
 ### 3. Shopify Order Webhook Ingestion
 - **Status**: `IMPLEMENTED_UNVERIFIED`
 - **Implementation Evidence**: Webhook route handler at [`src/app/api/webhooks/shopify/route.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/src/app/api/webhooks/shopify/route.ts) computes HMAC signature.
 - **Test Evidence**: Integration tests in [`tests/shopify.test.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/tests/shopify.test.ts) (HMAC verification and idempotency logic).
 - **Live Evidence**: None. No webhooks have been received or verified from a live Shopify store.
-- **Last Verified Commit**: `e0145f7c32bfd5162a04a6fc24fb7b4df44b4da3`
+- **Last Verified Commit**: None
 
 ### 4. Shopify Order Ingestion
-- **Status**: `REAL_VERIFIED`
+- **Status**: `IMPLEMENTED_UNVERIFIED`
 - **Implementation Evidence**: [`src/services/marketplace/eventProcessor.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/src/services/marketplace/eventProcessor.ts) parses order lines and decrements stock under row-level locks.
 - **Test Evidence**: Integration tests in [`tests/shopify.test.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/tests/shopify.test.ts).
-- **Live Evidence**: Verified with mock payload triggers mimicking real Shopify format inside integration test runs.
-- **Last Verified Commit**: `e0145f7c32bfd5162a04a6fc24fb7b4df44b4da3`
+- **Live Evidence**: None. No real webhooks have been processed from a live Shopify store.
+- **Last Verified Commit**: None
 
 ### 5. Shopify Outbound Inventory Sync
 - **Status**: `STUB`
 - **Implementation Evidence**: `syncInventory()` in [`src/services/marketplace/shopify.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/src/services/marketplace/shopify.ts) throws `NOT_SUPPORTED` when in `REAL` mode.
 - **Live Evidence**: None.
-- **Last Verified Commit**: `e0145f7c32bfd5162a04a6fc24fb7b4df44b4da3`
+- **Last Verified Commit**: None
 
 ### 6. Shopify Outbound Price Sync
 - **Status**: `STUB`
 - **Implementation Evidence**: `SyncService.processJob` in [`src/services/marketplace/syncService.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/src/services/marketplace/syncService.ts) invokes `syncInventory` regardless of operations, and Shopify adapter does not handle price syncs in `REAL` mode.
 - **Live Evidence**: None.
-- **Last Verified Commit**: `e0145f7c32bfd5162a04a6fc24fb7b4df44b4da3`
+- **Last Verified Commit**: None
 
 ### 7. Catawiki Price Collection via Apify Scraper
 - **Status**: `NOT_IMPLEMENTED`
 - **Implementation Evidence**: No Apify price source adapters, schema definitions, or pricing collection handlers exist in the repository.
 - **Live Evidence**: None.
-- **Last Verified Commit**: `e0145f7c32bfd5162a04a6fc24fb7b4df44b4da3`
+- **Last Verified Commit**: None
 
 ### 8. Durable Worker Scheduling
 - **Status**: `NOT_IMPLEMENTED`
 - **Implementation Evidence**: Outbound synchronization triggers in [`src/services/marketplace/syncService.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/src/services/marketplace/syncService.ts) execute background jobs using transient `setTimeout(..., 0)` triggers instead of a persistent worker.
 - **Live Evidence**: None.
-- **Last Verified Commit**: `e0145f7c32bfd5162a04a6fc24fb7b4df44b4da3`
+- **Last Verified Commit**: None

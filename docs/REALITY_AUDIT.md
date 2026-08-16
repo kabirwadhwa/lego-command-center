@@ -91,11 +91,11 @@ This document outlines the current state of implementation for various features 
 - **Limitations**: HMAC-SHA256 signature verification is skipped in DEMO mode if no secret is saved.
 
 ### 13. Shopify Order Processing
-- **Classification**: `REAL_VERIFIED`
+- **Classification**: `IMPLEMENTED_UNVERIFIED`
 - **Actual Source File**: `src/services/marketplace/eventProcessor.ts`
 - **Production Network Requests**: No.
 - **Values**: Real.
-- **Limitations**: Processes parsed Shopify `orders/create` payload and settles sales locally.
+- **Limitations**: Processes parsed Shopify `orders/create` payload and settles sales locally. Tested locally via mock order payloads in integration tests, but unverified using real Shopify network requests.
 
 ### 14. Shopify Outbound Inventory Sync
 - **Classification**: `STUB`

@@ -50,8 +50,8 @@ jobs:
       - name: Typecheck TypeScript
         run: npx tsc --noEmit
 
-      - name: Setup Test Database Schema
-        run: npx prisma db push --accept-data-loss
+      - name: Deploy Database Migrations
+        run: npx prisma migrate deploy
 
       - name: Seed Test Database
         run: npx prisma db seed

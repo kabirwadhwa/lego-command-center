@@ -135,4 +135,11 @@ export class CatawikiAdapter implements MarketplaceAdapter {
       webhooks: "NOT_SUPPORTED",
     };
   }
+
+  async testConnection(): Promise<{ success: boolean; error?: string }> {
+    if (this.mode === "DEMO") {
+      return { success: true };
+    }
+    return { success: false, error: "NOT_SUPPORTED: Real integration is not supported on Catawiki." };
+  }
 }

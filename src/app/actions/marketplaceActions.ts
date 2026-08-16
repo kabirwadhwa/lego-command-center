@@ -4,6 +4,9 @@ import prisma from "@/lib/prisma";
 import { checkRole } from "@/lib/auth";
 import { UserRole, MarketplaceType, ActorType, Prisma, InventoryBalance, ProductCondition } from "@prisma/client";
 import { revalidatePath } from "next/cache";
+import { ShopifyAdapter } from "@/services/marketplace/shopify";
+import { BolAdapter } from "@/services/marketplace/bol";
+import { CatawikiAdapter } from "@/services/marketplace/catawiki";
 
 /**
  * Saves/updates configuration parameters for a given marketplace integration.
@@ -233,5 +236,36 @@ export async function commitShopifyImportAction(params: {
     console.error("Shopify import commit failed:", err);
     const errorMsg = err instanceof Error ? err.message : "An unexpected error occurred.";
     return { success: false as const, error: errorMsg };
+  }
+}
+
+/**
+ * Tests connection settings for a given marketplace adapter without persisting them.
+ */
+export async function testMarketplaceConnectionAction(
+  type: MarketplaceType,
+  mode: "REAL" | "DEMO",
+  credentials: Record<string, string>
+) {
+  await checkRole([UserRole.ADMIN]);
+
+  try {
+    const credentialsJson = JSON.stringify(credentials);
+    
+    let adapter;
+    if (type === MarketplaceType.SHOPIFY) {
+      adapter = new ShopifyAdapter(mode, credentialsJson);
+    } else if (type === MarketplaceType.BOL) {
+      adapter = new BolAdapter(mode, credentialsJson);
+    } else {
+      adapter = new CatawikiAdapter(mode, credentialsJson);
+    }
+
+    const testResult = await adapter.testConnection();
+    return testResult;
+  } catch (err) {
+    console.error("Test connection failed:", err);
+    const errorMsg = err instanceof Error ? err.message : "Connection verification failed.";
+    return { success: false, error: errorMsg };
   }
 }

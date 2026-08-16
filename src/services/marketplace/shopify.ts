@@ -126,4 +126,36 @@ export class ShopifyAdapter implements MarketplaceAdapter {
       webhooks: hasCreds && hasWebhookSecret ? "AVAILABLE" : "NOT_CONFIGURED",
     };
   }
+
+  async testConnection(): Promise<{ success: boolean; error?: string }> {
+    if (this.mode === "DEMO") {
+      return { success: true };
+    }
+
+    if (!this.credentials?.shopName || !this.credentials?.accessToken) {
+      return { success: false, error: "NOT_CONFIGURED: Shopify credentials are missing." };
+    }
+
+    const { shopName, accessToken } = this.credentials;
+    const cleanShop = shopName.replace("https://", "").replace("http://", "");
+    const url = `https://${cleanShop}/admin/api/2023-07/shop.json`;
+
+    try {
+      const response = await fetch(url, {
+        headers: {
+          "X-Shopify-Access-Token": accessToken,
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (response.ok) {
+        return { success: true };
+      } else {
+        return { success: false, error: `Shopify responded with status: ${response.status} ${response.statusText}` };
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Network error connecting to Shopify.";
+      return { success: false, error: msg };
+    }
+  }
 }

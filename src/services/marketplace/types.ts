@@ -63,4 +63,5 @@ export interface MarketplaceAdapter {
   getMarketPrices(sku: string): Promise<MarketplacePriceObservation[]>;
   
   getCapabilities(): MarketplaceCapabilities;
+  testConnection(): Promise<{ success: boolean; error?: string }>;
 }

@@ -125,4 +125,36 @@ export class BolAdapter implements MarketplaceAdapter {
       webhooks: "NOT_SUPPORTED",
     };
   }
+
+  async testConnection(): Promise<{ success: boolean; error?: string }> {
+    if (this.mode === "DEMO") {
+      return { success: true };
+    }
+
+    if (!this.credentials?.clientId || !this.credentials?.clientSecret) {
+      return { success: false, error: "NOT_CONFIGURED: Bol credentials are missing." };
+    }
+
+    const url = "https://login.bol.com/token?grant_type=client_credentials";
+    const credentialsBase64 = Buffer.from(`${this.credentials.clientId}:${this.credentials.clientSecret}`).toString("base64");
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Authorization": `Basic ${credentialsBase64}`,
+          "Accept": "application/json",
+        },
+      });
+
+      if (response.ok) {
+        return { success: true };
+      } else {
+        return { success: false, error: `Bol login returned status: ${response.status} ${response.statusText}` };
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Network error connecting to Bol.";
+      return { success: false, error: msg };
+    }
+  }
 }

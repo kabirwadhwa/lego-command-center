@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { MarketplaceType } from "@prisma/client";
 import { saveMarketplaceConfigAction, disconnectMarketplaceAction, testMarketplaceConnectionAction } from "@/app/actions/marketplaceActions";
 
@@ -217,12 +218,22 @@ export default function MarketplaceManager({ initialMarketplaces }: MarketplaceM
                     </div>
 
                     {/* Actions */}
-                    <button
-                      onClick={() => startEditing(m)}
-                      className="w-full py-2 px-4 bg-slate-700 hover:bg-slate-600 active:bg-slate-650 text-white font-semibold text-xs rounded-lg transition-colors border border-slate-600"
-                    >
-                      Configure Settings
-                    </button>
+                    <div className="space-y-2">
+                      {m.id === MarketplaceType.SHOPIFY && (
+                        <Link
+                          href="/marketplaces/shopify/import"
+                          className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold text-xs rounded-lg transition-colors shadow-md shadow-blue-500/10 text-center block"
+                        >
+                          Onboard & Import Catalog
+                        </Link>
+                      )}
+                      <button
+                        onClick={() => startEditing(m)}
+                        className="w-full py-2 px-4 bg-slate-700 hover:bg-slate-600 active:bg-slate-650 text-white font-semibold text-xs rounded-lg transition-colors border border-slate-600"
+                      >
+                        Configure Settings
+                      </button>
+                    </div>
                   </>
                 ) : (
                   <div className="space-y-4">

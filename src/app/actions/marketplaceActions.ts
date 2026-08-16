@@ -2,7 +2,7 @@
 
 import prisma from "@/lib/prisma";
 import { checkRole } from "@/lib/auth";
-import { UserRole, MarketplaceType, ActorType, Prisma, InventoryBalance, ProductCondition } from "@prisma/client";
+import { UserRole, MarketplaceType, ActorType, Prisma, InventoryBalance, ProductCondition, EventStatus } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { ShopifyAdapter } from "@/services/marketplace/shopify";
 import { BolAdapter } from "@/services/marketplace/bol";
@@ -269,3 +269,132 @@ export async function testMarketplaceConnectionAction(
     return { success: false, error: errorMsg };
   }
 }
+
+/**
+ * Resolves an unmatched SKU alert by mapping it to a variant and reprocessing.
+ */
+export async function resolveUnmatchedSkuAction(
+  alertId: string,
+  variantId: string,
+  resolutionType: "PERMANENT" | "ONE_TIME"
+) {
+  const user = await checkRole([UserRole.ADMIN]);
+
+  try {
+    const alert = await prisma.alert.findUnique({
+      where: { id: alertId },
+    });
+
+    if (!alert || alert.resolved) {
+      throw new Error("Alert not found or already resolved.");
+    }
+
+    const parts = alert.message.split(" | ");
+    const eventIdPart = parts.find((p) => p.startsWith("Event:"));
+    const skuPart = parts.find((p) => p.startsWith("SKU:"));
+
+    if (!eventIdPart || !skuPart) {
+      throw new Error("Alert message is not in expected structured format.");
+    }
+
+    const eventId = eventIdPart.replace("Event:", "").trim();
+    const unmatchedSku = skuPart.replace("SKU:", "").trim();
+
+    const variant = await prisma.productVariant.findUnique({
+      where: { id: variantId },
+      include: { product: true },
+    });
+
+    if (!variant) {
+      throw new Error("Target product variant not found.");
+    }
+
+    if (resolutionType === "PERMANENT") {
+      await prisma.productVariant.update({
+        where: { id: variantId },
+        data: { sku: unmatchedSku },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          actorType: ActorType.USER,
+          actorId: user.id,
+          actorName: user.name,
+          action: "RESOLVE_SKU_PERMANENT",
+          details: `Mapped variant ${variant.product.name} (${variant.product.setNumber}) permanently to SKU: ${unmatchedSku}`,
+        },
+      });
+    } else {
+      const event = await prisma.marketplaceEvent.findUnique({
+        where: { id: eventId },
+      });
+
+      if (!event || !event.payload) {
+        throw new Error("Associated marketplace event or payload not found.");
+      }
+
+      const payload = JSON.parse(event.payload);
+      if (payload.line_items) {
+        for (const item of payload.line_items) {
+          if (!item.sku || item.sku === unmatchedSku) {
+            item.sku = variant.sku;
+          }
+        }
+      }
+
+      await prisma.marketplaceEvent.update({
+        where: { id: eventId },
+        data: {
+          payload: JSON.stringify(payload),
+          processingStatus: EventStatus.PENDING,
+          failureReason: null,
+        },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          actorType: ActorType.USER,
+          actorId: user.id,
+          actorName: user.name,
+          action: "RESOLVE_SKU_ONETIME",
+          details: `Mapped Shopify event ${eventId} line items temporarily to catalog SKU: ${variant.sku}`,
+        },
+      });
+    }
+
+    const { MarketplaceEventProcessor } = await import("@/services/marketplace/eventProcessor");
+    
+    if (resolutionType === "PERMANENT") {
+      await prisma.marketplaceEvent.update({
+        where: { id: eventId },
+        data: {
+          processingStatus: EventStatus.PENDING,
+          failureReason: null,
+        },
+      });
+    }
+
+    const reprocessResult = await MarketplaceEventProcessor.processEvent(eventId);
+
+    if (!reprocessResult.success) {
+      throw new Error(`Reprocessing failed: ${reprocessResult.error}`);
+    }
+
+    await prisma.alert.update({
+      where: { id: alertId },
+      data: {
+        resolved: true,
+        resolvedAt: new Date(),
+      },
+    });
+
+    revalidatePath("/alerts");
+    revalidatePath("/");
+    return { success: true as const };
+  } catch (err) {
+    console.error("Resolve unmatched SKU failed:", err);
+    const errorMsg = err instanceof Error ? err.message : "Failed to resolve unmatched SKU.";
+    return { success: false as const, error: errorMsg };
+  }
+}
+

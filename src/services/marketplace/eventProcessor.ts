@@ -51,7 +51,8 @@ export class MarketplaceEventProcessor {
               externalOrderId,
               "MISSING_SKU",
               event.marketplaceId,
-              `Line item title: ${item.title} has no SKU.`
+              `Line item title: ${item.title} has no SKU.`,
+              eventId
             );
             throw new Error(`Line item has no SKU.`);
           }
@@ -66,7 +67,8 @@ export class MarketplaceEventProcessor {
               externalOrderId,
               sku,
               event.marketplaceId,
-              `Unknown SKU: ${sku} in Shopify order #${externalOrderId}`
+              `Unknown SKU: ${sku} in Shopify order #${externalOrderId}`,
+              eventId
             );
             throw new Error(`Unmatched SKU: ${sku}`);
           }
@@ -156,13 +158,14 @@ export class MarketplaceEventProcessor {
     externalOrderId: string,
     sku: string,
     marketplace: MarketplaceType,
-    details: string
+    details: string,
+    eventId: string
   ) {
     await prisma.alert.create({
       data: {
         type: AlertType.UNMATCHED_ORDER,
         severity: AlertSeverity.CRITICAL,
-        message: `UNMATCHED_ORDER: Order #${externalOrderId} from ${marketplace} contains unknown SKU: ${sku}. Details: ${details}`,
+        message: `UNMATCHED_ORDER | Event: ${eventId} | Order: ${externalOrderId} | SKU: ${sku} | Details: ${details}`,
       },
     });
   }

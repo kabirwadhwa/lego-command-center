@@ -19,7 +19,13 @@ export async function saveMarketplaceConfigAction(
   const user = await checkRole([UserRole.ADMIN]);
 
   try {
-    const credString = JSON.stringify(credentials);
+    const cleanCredentials: Record<string, string> = {};
+    if (type === MarketplaceType.SHOPIFY) {
+      if (credentials.shopName) cleanCredentials.shopName = credentials.shopName;
+    } else if (type === MarketplaceType.BOL) {
+      if (credentials.clientId) cleanCredentials.clientId = credentials.clientId;
+    }
+    const credString = JSON.stringify(cleanCredentials);
 
     await prisma.marketplace.upsert({
       where: { id: type },
@@ -250,7 +256,17 @@ export async function testMarketplaceConnectionAction(
   await checkRole([UserRole.ADMIN]);
 
   try {
-    const credentialsJson = JSON.stringify(credentials);
+    const mergedCredentials: Record<string, string> = {};
+    if (type === MarketplaceType.SHOPIFY) {
+      mergedCredentials.shopName = credentials.shopName || process.env.SHOPIFY_STORE_DOMAIN || "";
+      mergedCredentials.accessToken = process.env.SHOPIFY_ADMIN_ACCESS_TOKEN || "";
+      mergedCredentials.webhookSecret = process.env.SHOPIFY_WEBHOOK_SECRET || "";
+    } else if (type === MarketplaceType.BOL) {
+      mergedCredentials.clientId = credentials.clientId || "";
+      mergedCredentials.clientSecret = process.env.BOL_CLIENT_SECRET || "";
+    }
+
+    const credentialsJson = JSON.stringify(mergedCredentials);
     
     let adapter;
     if (type === MarketplaceType.SHOPIFY) {

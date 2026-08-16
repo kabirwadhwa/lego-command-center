@@ -25,7 +25,7 @@ jest.mock("@supabase/ssr", () => ({
 }));
 
 import { prisma, pool } from "@/lib/prisma";
-import { getCurrentUser, checkRole, getAppMode, isDemoAuthEnabled } from "@/lib/auth";
+import { getCurrentUser, isDemoAuthEnabled } from "@/lib/auth";
 import { switchDemoUser } from "@/app/actions/authActions";
 import { UserRole } from "@prisma/client";
 

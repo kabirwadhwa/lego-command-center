@@ -14,6 +14,27 @@ export default async function MarketplacesPage() {
     orderBy: { id: "asc" },
   });
 
+  const clientMarketplaces = dbMarketplaces.map((m) => {
+    const cleanCredentials: Record<string, string> = {};
+    if (m.credentialsJson) {
+      try {
+        const parsed = JSON.parse(m.credentialsJson);
+        // Only permit safe, non-sensitive connection identifiers to reach the browser DTO
+        if (parsed.shopName) cleanCredentials.shopName = parsed.shopName;
+        if (parsed.clientId) cleanCredentials.clientId = parsed.clientId;
+      } catch {}
+    }
+
+    return {
+      id: m.id,
+      name: m.name,
+      status: m.status,
+      mode: m.mode,
+      credentialsJson: Object.keys(cleanCredentials).length > 0 ? JSON.stringify(cleanCredentials) : null,
+      lastSyncedAt: m.lastSyncedAt,
+    };
+  });
+
   return (
     <main className="flex-1 p-8 overflow-y-auto bg-slate-950 text-white">
       {/* Title Header */}
@@ -25,7 +46,7 @@ export default async function MarketplacesPage() {
       </div>
 
       {/* Grid of integrations */}
-      <MarketplaceManager initialMarketplaces={dbMarketplaces} />
+      <MarketplaceManager initialMarketplaces={clientMarketplaces} />
     </main>
   );
 }

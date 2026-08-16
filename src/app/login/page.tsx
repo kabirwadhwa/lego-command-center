@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getCurrentUser, getAppMode, isDemoAuthEnabled } from "@/lib/auth";
+import { getCurrentUser, getAppMode } from "@/lib/auth";
 import { cookies } from "next/headers";
 import { authenticateDemoAccessAction } from "@/app/actions/authActions";
 
@@ -12,7 +12,6 @@ export default async function LoginPage() {
   }
 
   const appMode = getAppMode();
-  const demoAuth = isDemoAuthEnabled();
 
   const cookieStore = await cookies();
   const hasDemoAccess = cookieStore.get("demo_access_token")?.value === "true";

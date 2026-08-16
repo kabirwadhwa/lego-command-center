@@ -12,15 +12,31 @@ export class MarketplaceFactory {
     });
 
     const mode = (config?.mode === "REAL" ? "REAL" : "DEMO") as "REAL" | "DEMO";
-    const credentials = config?.credentialsJson;
+    
+    const mergedCreds: Record<string, string> = {};
+    if (config?.credentialsJson) {
+      try {
+        Object.assign(mergedCreds, JSON.parse(config.credentialsJson));
+      } catch {}
+    }
+
+    if (type === MarketplaceType.SHOPIFY) {
+      if (process.env.SHOPIFY_STORE_DOMAIN) mergedCreds.shopName = process.env.SHOPIFY_STORE_DOMAIN;
+      if (process.env.SHOPIFY_ADMIN_ACCESS_TOKEN) mergedCreds.accessToken = process.env.SHOPIFY_ADMIN_ACCESS_TOKEN;
+      if (process.env.SHOPIFY_WEBHOOK_SECRET) mergedCreds.webhookSecret = process.env.SHOPIFY_WEBHOOK_SECRET;
+    } else if (type === MarketplaceType.BOL) {
+      if (process.env.BOL_CLIENT_SECRET) mergedCreds.clientSecret = process.env.BOL_CLIENT_SECRET;
+    }
+
+    const credentialsJson = JSON.stringify(mergedCreds);
 
     switch (type) {
       case MarketplaceType.SHOPIFY:
-        return new ShopifyAdapter(mode, credentials);
+        return new ShopifyAdapter(mode, credentialsJson);
       case MarketplaceType.BOL:
-        return new BolAdapter(mode, credentials);
+        return new BolAdapter(mode, credentialsJson);
       case MarketplaceType.CATAWIKI:
-        return new CatawikiAdapter(mode, credentials);
+        return new CatawikiAdapter(mode, credentialsJson);
       default:
         throw new Error(`Unsupported marketplace type: ${type}`);
     }

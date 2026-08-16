@@ -434,3 +434,64 @@ export async function retrySyncJobAction(jobId: string) {
   }
 }
 
+/**
+ * Resolves a reconciliation mismatch by pushing central quantity to Shopify.
+ */
+export async function triggerOutboundSyncAction(productVariantId: string) {
+  await checkRole([UserRole.ADMIN]);
+
+  try {
+    const { SyncService } = await import("@/services/marketplace/syncService");
+    await SyncService.queueAndTriggerSync(productVariantId);
+    return { success: true as const };
+  } catch (err) {
+    console.error("Failed to trigger outbound sync:", err);
+    const errorMsg = err instanceof Error ? err.message : "Failed to queue sync job.";
+    return { success: false as const, error: errorMsg };
+  }
+}
+
+/**
+ * Resolves a reconciliation mismatch by correcting local stock level.
+ */
+export async function resolveReconciliationCorrectionAction(params: {
+  productVariantId: string;
+  quantityChange: number;
+  notes?: string;
+}) {
+  const user = await checkRole([UserRole.ADMIN]);
+
+  try {
+    const companyAccount = await prisma.inventoryAccount.findFirst({
+      where: { type: "COMPANY", status: "ACTIVE" },
+    });
+
+    if (!companyAccount) {
+      throw new Error("No active Company inventory account found.");
+    }
+
+    const { InventoryService } = await import("@/services/inventoryService");
+    
+    await InventoryService.adjustStock({
+      actorId: user.id,
+      actorName: user.name,
+      productVariantId: params.productVariantId,
+      inventoryAccountId: companyAccount.id,
+      type: "STOCK_COUNT_CORRECTION",
+      quantityChange: params.quantityChange,
+      notes: params.notes || "Reconciliation discrepancy adjustment correction.",
+    });
+
+    const { SyncService } = await import("@/services/marketplace/syncService");
+    await SyncService.queueAndTriggerSync(params.productVariantId);
+
+    revalidatePath("/marketplaces/shopify/reconciliation");
+    revalidatePath("/");
+    return { success: true as const };
+  } catch (err) {
+    console.error("Reconciliation correction failed:", err);
+    const errorMsg = err instanceof Error ? err.message : "Failed to resolve mismatch.";
+    return { success: false as const, error: errorMsg };
+  }
+}
+

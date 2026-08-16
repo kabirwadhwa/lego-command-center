@@ -220,12 +220,20 @@ export default function MarketplaceManager({ initialMarketplaces }: MarketplaceM
                     {/* Actions */}
                     <div className="space-y-2">
                       {m.id === MarketplaceType.SHOPIFY && (
-                        <Link
-                          href="/marketplaces/shopify/import"
-                          className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold text-xs rounded-lg transition-colors shadow-md shadow-blue-500/10 text-center block"
-                        >
-                          Onboard & Import Catalog
-                        </Link>
+                        <>
+                          <Link
+                            href="/marketplaces/shopify/import"
+                            className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-semibold text-xs rounded-lg transition-colors shadow-md shadow-blue-500/10 text-center block"
+                          >
+                            Onboard & Import Catalog
+                          </Link>
+                          <Link
+                            href="/marketplaces/shopify/reconciliation"
+                            className="w-full py-2 px-4 bg-slate-700 hover:bg-slate-650 text-white font-semibold text-xs rounded-lg transition-colors border border-slate-600 text-center block"
+                          >
+                            Reconcile Inventory
+                          </Link>
+                        </>
                       )}
                       <button
                         onClick={() => startEditing(m)}

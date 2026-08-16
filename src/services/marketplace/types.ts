@@ -45,6 +45,15 @@ export interface MarketplacePriceObservation {
   listingUrl?: string;
 }
 
+export type CapabilityStatus = "AVAILABLE" | "NOT_CONFIGURED" | "NOT_SUPPORTED";
+
+export interface MarketplaceCapabilities {
+  orders: CapabilityStatus;
+  inventorySync: CapabilityStatus;
+  pricing: CapabilityStatus;
+  webhooks: CapabilityStatus;
+}
+
 export interface MarketplaceAdapter {
   getOrders(): Promise<MarketplaceOrder[]>;
   getOrder(externalOrderId: string): Promise<MarketplaceOrder | null>;
@@ -53,8 +62,5 @@ export interface MarketplaceAdapter {
   getListings(): Promise<MarketplaceListing[]>;
   getMarketPrices(sku: string): Promise<MarketplacePriceObservation[]>;
   
-  supportsOrders(): boolean;
-  supportsInventorySync(): boolean;
-  supportsPricing(): boolean;
-  supportsWebhooks(): boolean;
+  getCapabilities(): MarketplaceCapabilities;
 }

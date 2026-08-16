@@ -1,5 +1,5 @@
 import { SyncStatus } from "@prisma/client";
-import { MarketplaceAdapter, MarketplaceOrder, MarketplaceListing, MarketplacePriceObservation } from "./types";
+import { MarketplaceAdapter, MarketplaceOrder, MarketplaceListing, MarketplacePriceObservation, MarketplaceCapabilities } from "./types";
 
 export class CatawikiAdapter implements MarketplaceAdapter {
   private mode: "REAL" | "DEMO";
@@ -118,8 +118,21 @@ export class CatawikiAdapter implements MarketplaceAdapter {
     throw new Error("NOT_SUPPORTED");
   }
 
-  supportsOrders(): boolean { return false; }
-  supportsInventorySync(): boolean { return false; }
-  supportsPricing(): boolean { return true; }
-  supportsWebhooks(): boolean { return false; }
+  getCapabilities(): MarketplaceCapabilities {
+    if (this.mode === "DEMO") {
+      return {
+        orders: "AVAILABLE",
+        inventorySync: "NOT_SUPPORTED",
+        pricing: "AVAILABLE",
+        webhooks: "NOT_SUPPORTED",
+      };
+    }
+
+    return {
+      orders: "NOT_SUPPORTED",
+      inventorySync: "NOT_SUPPORTED",
+      pricing: "NOT_SUPPORTED",
+      webhooks: "NOT_SUPPORTED",
+    };
+  }
 }

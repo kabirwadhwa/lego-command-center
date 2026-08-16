@@ -1,5 +1,5 @@
 import { SyncStatus } from "@prisma/client";
-import { MarketplaceAdapter, MarketplaceOrder, MarketplaceListing, MarketplacePriceObservation } from "./types";
+import { MarketplaceAdapter, MarketplaceOrder, MarketplaceListing, MarketplacePriceObservation, MarketplaceCapabilities } from "./types";
 
 export class ShopifyAdapter implements MarketplaceAdapter {
   private mode: "REAL" | "DEMO";
@@ -106,8 +106,24 @@ export class ShopifyAdapter implements MarketplaceAdapter {
     throw new Error("NOT_SUPPORTED");
   }
 
-  supportsOrders(): boolean { return true; }
-  supportsInventorySync(): boolean { return true; }
-  supportsPricing(): boolean { return true; }
-  supportsWebhooks(): boolean { return true; }
+  getCapabilities(): MarketplaceCapabilities {
+    if (this.mode === "DEMO") {
+      return {
+        orders: "AVAILABLE",
+        inventorySync: "AVAILABLE",
+        pricing: "AVAILABLE",
+        webhooks: "AVAILABLE",
+      };
+    }
+
+    const hasCreds = !!(this.credentials?.shopName && this.credentials?.accessToken);
+    const hasWebhookSecret = !!this.credentials?.webhookSecret;
+
+    return {
+      orders: hasCreds ? "AVAILABLE" : "NOT_CONFIGURED",
+      inventorySync: hasCreds ? "AVAILABLE" : "NOT_CONFIGURED",
+      pricing: hasCreds ? "AVAILABLE" : "NOT_CONFIGURED",
+      webhooks: hasCreds && hasWebhookSecret ? "AVAILABLE" : "NOT_CONFIGURED",
+    };
+  }
 }

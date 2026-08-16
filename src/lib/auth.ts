@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 import { UserRole } from "@prisma/client";
 import prisma from "./prisma";
+import crypto from "crypto";
 
 // Custom typed domain errors
 export class AuthError extends Error {
@@ -25,8 +26,34 @@ export interface AuthUser {
  * Helper to determine if we are in DEMO mode.
  * Falls back to true if NEXT_PUBLIC_INTEGRATION_MODE is not set or set to "DEMO".
  */
+export function getAppMode(): "development" | "demo" | "production" {
+  const mode = process.env.APP_MODE;
+  if (mode === "development" || mode === "demo" || mode === "production") {
+    return mode;
+  }
+  return "production";
+}
+
+export function isDemoAuthEnabled(): boolean {
+  if (getAppMode() === "production") {
+    return false;
+  }
+  return process.env.ENABLE_DEMO_AUTH === "true";
+}
+
+export function verifyDemoPassword(password: string): boolean {
+  const hash = process.env.DEMO_PASSWORD_HASH;
+  if (!hash || hash.length !== 64) return false;
+  try {
+    const computed = crypto.createHash("sha256").update(password).digest("hex");
+    return crypto.timingSafeEqual(Buffer.from(computed, "hex"), Buffer.from(hash, "hex"));
+  } catch {
+    return false;
+  }
+}
+
 export function isDemoMode(): boolean {
-  return !process.env.NEXT_PUBLIC_INTEGRATION_MODE || process.env.NEXT_PUBLIC_INTEGRATION_MODE === "DEMO";
+  return getAppMode() !== "production";
 }
 
 /**
@@ -34,22 +61,58 @@ export function isDemoMode(): boolean {
  * Does not check database roles directly, returns basic identification.
  */
 export async function getSessionUser(): Promise<{ id: string; email: string } | null> {
-  const isDemo = isDemoMode();
+  const appMode = getAppMode();
 
-  if (isDemo) {
-    // In demo mode, look for the local session cookie
+  if (appMode === "production") {
     const cookieStore = await cookies();
-    const activeUserId = cookieStore.get("lego_demo_user_id")?.value;
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-    if (!activeUserId) {
-      // Default to admin user in development if no cookie is set, to ensure first-run onboarding is frictionless
-      return {
-        id: "44444444-4444-4444-4444-444444444444", // Kristof's fixed seed UUID
-        email: "kristof@vervliet.be",
-      };
+    if (!supabaseUrl || !supabaseAnonKey) {
+      // Fail closed secure fallback
+      return null;
     }
 
-    // Resolve the user from database using the cookie id
+    const supabase = createServerClient(
+      supabaseUrl,
+      supabaseAnonKey,
+      {
+        cookies: {
+          getAll() {
+            return cookieStore.getAll().map((c) => ({ name: c.name, value: c.value }));
+          },
+          setAll(cookiesToSet) {
+            try {
+              cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options));
+            } catch {}
+          },
+        },
+      }
+    );
+
+    const { data: { user }, error } = await supabase.auth.getUser();
+    if (error || !user) {
+      return null;
+    }
+
+    return {
+      id: user.id,
+      email: user.email ?? ""
+    };
+  }
+
+  if (appMode === "demo") {
+    const cookieStore = await cookies();
+    const hasDemoAccess = cookieStore.get("demo_access_token")?.value === "true";
+    if (!hasDemoAccess) {
+      return null;
+    }
+
+    const activeUserId = cookieStore.get("lego_demo_user_id")?.value;
+    if (!activeUserId) {
+      return null;
+    }
+
     const user = await prisma.user.findUnique({
       where: { id: activeUserId }
     });
@@ -64,44 +127,33 @@ export async function getSessionUser(): Promise<{ id: string; email: string } | 
     };
   }
 
-  // In REAL mode, fetch using Supabase Client
-  const cookieStore = await cookies();
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  // Development mode fallback
+  if (appMode === "development") {
+    const cookieStore = await cookies();
+    const activeUserId = cookieStore.get("lego_demo_user_id")?.value;
 
-  if (!supabaseUrl || !supabaseAnonKey) {
-    throw new AuthError("CONFIGURATION_ERROR", "Supabase credentials are missing.");
-  }
-
-  const supabase = createServerClient(
-    supabaseUrl,
-    supabaseAnonKey,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll().map((c) => ({ name: c.name, value: c.value }));
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options));
-          } catch {
-            // Server actions or route handlers might ignore setting cookies on read-only requests
-          }
-        },
-      },
+    if (!activeUserId) {
+      return {
+        id: "44444444-4444-4444-4444-444444444444", // Kristof's fixed seed UUID
+        email: "kristof@vervliet.be",
+      };
     }
-  );
 
-  const { data: { user }, error } = await supabase.auth.getUser();
+    const user = await prisma.user.findUnique({
+      where: { id: activeUserId }
+    });
 
-  if (error || !user) {
-    return null;
+    if (!user || user.status !== "ACTIVE") {
+      return null;
+    }
+
+    return {
+      id: user.id,
+      email: user.email
+    };
   }
 
-  return {
-    id: user.id,
-    email: user.email ?? ""
-  };
+  return null;
 }
 
 /**

@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
-import { getCurrentUser, isDemoMode } from "@/lib/auth";
+import { getCurrentUser, getAppMode, isDemoAuthEnabled } from "@/lib/auth";
 import { cookies } from "next/headers";
+import { authenticateDemoAccessAction } from "@/app/actions/authActions";
 
 export default async function LoginPage() {
   const user = await getCurrentUser();
@@ -10,7 +11,11 @@ export default async function LoginPage() {
     redirect("/");
   }
 
-  const isDemo = isDemoMode();
+  const appMode = getAppMode();
+  const demoAuth = isDemoAuthEnabled();
+
+  const cookieStore = await cookies();
+  const hasDemoAccess = cookieStore.get("demo_access_token")?.value === "true";
 
   // Action for logging in using simulated demo profiles
   const handleDemoLogin = async (formData: FormData) => {
@@ -25,6 +30,20 @@ export default async function LoginPage() {
         sameSite: "lax",
       });
       redirect("/");
+    }
+  };
+
+  // Action to verify demo password
+  const handleDemoPasswordSubmit = async (formData: FormData) => {
+    "use server";
+    const password = formData.get("password") as string;
+    if (password) {
+      const res = await authenticateDemoAccessAction(password);
+      if (res.success) {
+        redirect("/login"); // Reload to show the choose profile switcher
+      } else {
+        redirect("/login?error=incorrect_password");
+      }
     }
   };
 
@@ -44,7 +63,34 @@ export default async function LoginPage() {
           </p>
         </div>
 
-        {isDemo ? (
+        {appMode === "demo" && !hasDemoAccess ? (
+          /* Password input for Demo Access Gate */
+          <form action={handleDemoPasswordSubmit} className="flex flex-col space-y-4">
+            <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 text-xs text-amber-300 font-medium leading-relaxed">
+              <strong>Protected Demo Environment</strong>: Access requires the demo password.
+            </div>
+
+            <div className="flex flex-col space-y-1.5">
+              <label className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                Demo Password
+              </label>
+              <input
+                type="password"
+                name="password"
+                required
+                className="w-full text-xs font-semibold bg-slate-900 border border-slate-700 text-white rounded-lg p-3 outline-none focus:border-blue-500 transition-colors"
+                placeholder="••••••••"
+              />
+            </div>
+
+            <button
+              type="submit"
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs p-3 rounded-lg shadow transition-colors duration-200 mt-2"
+            >
+              Verify Password & Enter Demo
+            </button>
+          </form>
+        ) : appMode !== "production" ? (
           /* Demo Mode Switcher Card */
           <form action={handleDemoLogin} className="flex flex-col space-y-4">
             <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 text-xs text-blue-300 font-medium leading-relaxed">

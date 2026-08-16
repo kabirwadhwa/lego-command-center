@@ -13,9 +13,10 @@ interface TopBarProps {
     email: string;
     role: string;
   } | null;
+  showRoleSwitcher?: boolean;
 }
 
-export default function TopBar({ currentUser }: TopBarProps) {
+export default function TopBar({ currentUser, showRoleSwitcher }: TopBarProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [quickActionOpen, setQuickActionOpen] = useState(false);
@@ -53,7 +54,7 @@ export default function TopBar({ currentUser }: TopBarProps) {
       {/* Action Utilities & Auth Info */}
       <div className="flex items-center gap-4">
         {/* Role Switcher (Visible in Development/Demo mode) */}
-        {process.env.NEXT_PUBLIC_INTEGRATION_MODE !== "REAL" && (
+        {showRoleSwitcher && (
           <RoleSwitcher currentUser={currentUser} />
         )}
 

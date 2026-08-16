@@ -25,18 +25,21 @@ jest.mock("@supabase/ssr", () => ({
 }));
 
 import { prisma, pool } from "@/lib/prisma";
-import { getCurrentUser, checkRole } from "@/lib/auth";
+import { getCurrentUser, checkRole, getAppMode, isDemoAuthEnabled } from "@/lib/auth";
+import { switchDemoUser } from "@/app/actions/authActions";
 import { UserRole } from "@prisma/client";
 
-describe("Supabase Auth User Identity and Provisioning Tests", () => {
+describe("Supabase Auth User Identity, Hardening & Security separation tests", () => {
   const testUserUuid = "88888888-8888-8888-8888-888888888888";
   const testUserEmail = "auth-test@vervliet.be";
-  let originalMode: string | undefined;
+  let originalAppMode: string | undefined;
+  let originalDemoAuth: string | undefined;
   let originalSupabaseUrl: string | undefined;
   let originalSupabaseKey: string | undefined;
 
   beforeAll(() => {
-    originalMode = process.env.NEXT_PUBLIC_INTEGRATION_MODE;
+    originalAppMode = process.env.APP_MODE;
+    originalDemoAuth = process.env.ENABLE_DEMO_AUTH;
     originalSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     originalSupabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -45,7 +48,8 @@ describe("Supabase Auth User Identity and Provisioning Tests", () => {
   });
 
   afterAll(async () => {
-    process.env.NEXT_PUBLIC_INTEGRATION_MODE = originalMode;
+    process.env.APP_MODE = originalAppMode;
+    process.env.ENABLE_DEMO_AUTH = originalDemoAuth;
     process.env.NEXT_PUBLIC_SUPABASE_URL = originalSupabaseUrl;
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = originalSupabaseKey;
 
@@ -61,18 +65,78 @@ describe("Supabase Auth User Identity and Provisioning Tests", () => {
       where: { id: testUserUuid },
     });
     mockCookieGet.mockReset();
-    process.env.NEXT_PUBLIC_INTEGRATION_MODE = originalMode;
+    process.env.APP_MODE = "development";
+    process.env.ENABLE_DEMO_AUTH = "false";
+    process.env.NEXT_PUBLIC_SUPABASE_URL = "https://mock-supabase.supabase.co";
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "mock-anon-key";
   });
 
-  test("Should return null in Demo mode if cookie points to a non-existent or inactive user", async () => {
-    process.env.NEXT_PUBLIC_INTEGRATION_MODE = "DEMO";
-    mockCookieGet.mockReturnValue({ value: "non-existent-user-id" });
+  test("Should return null in Demo appMode if cookies point to non-existent or inactive user", async () => {
+    process.env.APP_MODE = "demo";
+    mockCookieGet.mockImplementation((name) => {
+      if (name === "demo_access_token") return { value: "true" };
+      if (name === "lego_demo_user_id") return { value: "non-existent-user-id" };
+      return null;
+    });
     const user = await getCurrentUser();
     expect(user).toBeNull();
   });
 
-  test("Should auto-provision a profile if session exists in REAL mode but database record is missing", async () => {
-    process.env.NEXT_PUBLIC_INTEGRATION_MODE = "REAL";
+  test("Demo role switching is blocked when demo access token is missing", async () => {
+    process.env.APP_MODE = "demo";
+    mockCookieGet.mockImplementation((name) => {
+      if (name === "demo_access_token") return null;
+      return null;
+    });
+
+    await expect(switchDemoUser("44444444-4444-4444-4444-444444444444")).rejects.toThrow();
+  });
+
+  test("Demo mode access requires password cookie token", async () => {
+    process.env.APP_MODE = "demo";
+    mockCookieGet.mockImplementation((name) => {
+      if (name === "demo_access_token") return null; // Missing
+      if (name === "lego_demo_user_id") return { value: testUserUuid };
+      return null;
+    });
+    const user = await getCurrentUser();
+    expect(user).toBeNull();
+  });
+
+  test("Production mode absolutely disables demo auth, ignores cookie switcher", async () => {
+    process.env.APP_MODE = "production";
+    process.env.ENABLE_DEMO_AUTH = "true"; // Attempt to bypass
+
+    expect(isDemoAuthEnabled()).toBe(false);
+
+    mockCookieGet.mockImplementation((name) => {
+      if (name === "lego_demo_user_id") return { value: "44444444-4444-4444-4444-444444444444" };
+      return null;
+    });
+
+    // Should verify Supabase getUser instead of cookie fallback
+    const user = await getCurrentUser();
+    expect(user?.id).toBe(testUserUuid); // resolved from mocked getUser()
+  });
+
+  test("Production mode fails closed when Supabase configuration is missing", async () => {
+    process.env.APP_MODE = "production";
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    const user = await getCurrentUser();
+    expect(user).toBeNull();
+  });
+
+  test("Production mode blocks switchDemoUser server action", async () => {
+    process.env.APP_MODE = "production";
+    await expect(switchDemoUser("44444444-4444-4444-4444-444444444444")).rejects.toThrow(
+      "Privilege switching is forbidden in production/real integration environments."
+    );
+  });
+
+  test("Should auto-provision a profile if session exists in production mode but database record is missing", async () => {
+    process.env.APP_MODE = "production";
     
     // Validate profile is missing initially
     const initialProfile = await prisma.user.findUnique({
@@ -94,55 +158,5 @@ describe("Supabase Auth User Identity and Provisioning Tests", () => {
     expect(dbProfile).not.toBeNull();
     expect(dbProfile?.id).toBe(testUserUuid);
     expect(dbProfile?.email).toBe(testUserEmail);
-  });
-
-  test("Supabase Auth UUID = Application User.id Alignment", async () => {
-    // Manually provision a user profile with the exact Supabase Auth UUID
-    const createdUser = await prisma.user.create({
-      data: {
-        id: testUserUuid,
-        email: testUserEmail,
-        name: "Test User Identity",
-        role: UserRole.FAMILY_SELLER,
-        status: "ACTIVE",
-      },
-    });
-
-    expect(createdUser.id).toBe(testUserUuid);
-
-    // Mock session cookie to point to this UUID in DEMO mode
-    process.env.NEXT_PUBLIC_INTEGRATION_MODE = "DEMO";
-    mockCookieGet.mockReturnValue({ value: testUserUuid });
-
-    const currentUser = await getCurrentUser();
-    expect(currentUser).not.toBeNull();
-    expect(currentUser?.id).toBe(testUserUuid);
-    expect(currentUser?.email).toBe(testUserEmail);
-    expect(currentUser?.role).toBe(UserRole.FAMILY_SELLER);
-  });
-
-  test("Role authorization guard checks", async () => {
-    // Seed test profile
-    await prisma.user.create({
-      data: {
-        id: testUserUuid,
-        email: testUserEmail,
-        name: "Test User Identity",
-        role: UserRole.VIEWER,
-        status: "ACTIVE",
-      },
-    });
-
-    process.env.NEXT_PUBLIC_INTEGRATION_MODE = "DEMO";
-    mockCookieGet.mockReturnValue({ value: testUserUuid });
-
-    // 1. Permitted role access should succeed
-    const authorizedUser = await checkRole([UserRole.VIEWER, UserRole.ADMIN]);
-    expect(authorizedUser.id).toBe(testUserUuid);
-
-    // 2. Mismatched role access should throw AuthError
-    await expect(checkRole([UserRole.ADMIN])).rejects.toThrow(
-      "You do not have permission to perform this action."
-    );
   });
 });

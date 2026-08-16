@@ -1,6 +1,6 @@
 import Sidebar from "@/components/Sidebar";
 import TopBar from "@/components/TopBar";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, getAppMode } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import prisma from "@/lib/prisma";
 import TransferModal from "@/components/TransferModal";
@@ -37,7 +37,7 @@ export default async function DashboardLayout({
       <Sidebar userRole={user.role} />
 
       {/* Top Header Section */}
-      <TopBar currentUser={user} />
+      <TopBar currentUser={user} showRoleSwitcher={getAppMode() !== "production"} />
 
       {/* Main View Area */}
       <main className="pl-64 pt-16 min-h-screen">

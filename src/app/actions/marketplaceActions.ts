@@ -2,7 +2,7 @@
 
 import prisma from "@/lib/prisma";
 import { checkRole } from "@/lib/auth";
-import { UserRole, MarketplaceType, ActorType, Prisma, InventoryBalance, ProductCondition, EventStatus } from "@prisma/client";
+import { UserRole, MarketplaceType, ActorType, Prisma, InventoryBalance, ProductCondition, EventStatus, SyncStatus } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { ShopifyAdapter } from "@/services/marketplace/shopify";
 import { BolAdapter } from "@/services/marketplace/bol";
@@ -395,6 +395,42 @@ export async function resolveUnmatchedSkuAction(
     console.error("Resolve unmatched SKU failed:", err);
     const errorMsg = err instanceof Error ? err.message : "Failed to resolve unmatched SKU.";
     return { success: false as const, error: errorMsg };
+  }
+}
+
+/**
+ * Retries a failed or pending synchronization job manually.
+ */
+export async function retrySyncJobAction(jobId: string) {
+  await checkRole([UserRole.ADMIN, UserRole.FAMILY_SELLER]);
+
+  try {
+    const job = await prisma.syncJob.findUnique({
+      where: { id: jobId },
+    });
+
+    if (!job) {
+      throw new Error("Job not found.");
+    }
+
+    await prisma.syncJob.update({
+      where: { id: jobId },
+      data: {
+        status: SyncStatus.PENDING,
+        attemptNumber: 1,
+        errorDetails: null,
+      },
+    });
+
+    const { SyncService } = await import("@/services/marketplace/syncService");
+    const result = await SyncService.processJob(jobId);
+
+    revalidatePath("/marketplaces");
+    return { success: result.success, error: result.error };
+  } catch (err) {
+    console.error("Retry sync job failed:", err);
+    const errorMsg = err instanceof Error ? err.message : "Failed to retry synchronization job.";
+    return { success: false, error: errorMsg };
   }
 }
 

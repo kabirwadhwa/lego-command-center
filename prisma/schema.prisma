@@ -384,7 +384,7 @@ model SyncJob {
 model Alert {
   id               String          @id @default(uuid())
   productVariantId String?
-  productVariant   ProductVariant? @relation(fields: [productVariantId], references: [id], onDelete: Cascade)
+  productVariant   ProductVariant? @relation(fields: [productVariantId], references: [id], onDelete: SetNull)
   type             AlertType
   severity         AlertSeverity
   message          String

@@ -7,105 +7,105 @@ This document outlines the current state of implementation for various features 
 ## Capabilities Classification
 
 ### 1. Authentication
-- **Classification**: `PARTIAL`
+- **Classification**: `IMPLEMENTED_UNVERIFIED`
 - **Actual Source File**: `src/lib/auth.ts`, `src/app/login/page.tsx`
 - **Production Network Requests**: Yes, to Supabase Auth endpoints (when configured).
 - **Values**: Real when configured; fallbacks to a simulated cookie-based/mock administrator identity in `DEMO` mode or during test runs.
 - **Limitations**: In `DEMO` mode, defaults anonymous connections to an administrative profile (`Kristof`) to facilitate onboarding. Decision logic is based on browser-accessible environment variables.
 
 ### 2. Inventory Ledger Operations
-- **Classification**: `WORKING_REAL`
+- **Classification**: `IMPLEMENTED_UNVERIFIED`
 - **Actual Source File**: `src/services/inventoryService.ts`
 - **Production Network Requests**: No (operates strictly on local database).
 - **Values**: Real.
 - **Limitations**: Governs wholesale intake, sales settlements, stock transfers, and manual corrections locally with database row-level locking.
 
 ### 3. Company Inventory
-- **Classification**: `WORKING_REAL`
+- **Classification**: `IMPLEMENTED_UNVERIFIED`
 - **Actual Source File**: `src/services/inventoryService.ts`, `src/app/(dashboard)/inventory/page.tsx`
 - **Production Network Requests**: No.
 - **Values**: Real.
 - **Limitations**: Tracks inventory balances assigned to accounts with type `COMPANY`.
 
 ### 4. Personal Inventory
-- **Classification**: `WORKING_REAL`
+- **Classification**: `IMPLEMENTED_UNVERIFIED`
 - **Actual Source File**: `src/services/inventoryService.ts`, `src/app/(dashboard)/inventory/page.tsx`
 - **Production Network Requests**: No.
 - **Values**: Real.
 - **Limitations**: Tracks inventory balances assigned to accounts with type `PERSONAL`.
 
 ### 5. Purchases (Wholesale Intake)
-- **Classification**: `WORKING_REAL`
+- **Classification**: `IMPLEMENTED_UNVERIFIED`
 - **Actual Source File**: `src/services/inventoryService.ts`, `src/app/(dashboard)/purchases/page.tsx`
 - **Production Network Requests**: No.
 - **Values**: Real.
 - **Limitations**: Records supplier purchases and updates variant cost basis using moving averages.
 
 ### 6. Manual Sales
-- **Classification**: `WORKING_REAL`
+- **Classification**: `IMPLEMENTED_UNVERIFIED`
 - **Actual Source File**: `src/services/inventoryService.ts`, `src/app/(dashboard)/sales/page.tsx`
 - **Production Network Requests**: No.
 - **Values**: Real.
 - **Limitations**: Records offline invoice transactions and settles margin statistics.
 
 ### 7. Transfers
-- **Classification**: `WORKING_REAL`
+- **Classification**: `IMPLEMENTED_UNVERIFIED`
 - **Actual Source File**: `src/services/inventoryService.ts`, `src/components/TransferModal.tsx`
 - **Production Network Requests**: No.
 - **Values**: Real.
 - **Limitations**: Double-entry ledger updates between internal warehouses.
 
 ### 8. Adjustments
-- **Classification**: `WORKING_REAL`
+- **Classification**: `IMPLEMENTED_UNVERIFIED`
 - **Actual Source File**: `src/services/inventoryService.ts`, `src/components/AdjustModal.tsx`
 - **Production Network Requests**: No.
 - **Values**: Real.
 - **Limitations**: Supports manual stock quantity corrections.
 
 ### 9. CSV/XLSX Import
-- **Classification**: `WORKING_REAL`
-- **Actual Source File**: `src/components/ImportWizard.tsx`, `src/app/actions/marketplaceActions.ts`
+- **Classification**: `IMPLEMENTED_UNVERIFIED`
+- **Actual Source File**: `src/components/ImportWizard.tsx`, `src/app/actions/inventoryActions.ts`
 - **Production Network Requests**: No.
 - **Values**: Real.
 - **Limitations**: Processes spreadsheets, extracts set numbers, matches variants, and intakes balances in a single transaction.
 
 ### 10. Shopify Connection
-- **Classification**: `PARTIAL`
+- **Classification**: `IMPLEMENTED_UNVERIFIED`
 - **Actual Source File**: `src/services/marketplace/shopify.ts`
 - **Production Network Requests**: Yes, in `REAL` mode (requests `GET /admin/api/2023-07/shop.json`).
 - **Values**: Real in `REAL` mode, simulated success in `DEMO` mode.
 - **Limitations**: Verifies access token connectivity with Shopify API.
 
 ### 11. Shopify Product Import
-- **Classification**: `PARTIAL`
+- **Classification**: `DEMO_ONLY`
 - **Actual Source File**: `src/services/marketplace/shopify.ts`, `src/components/ShopifyImportWizard.tsx`
 - **Production Network Requests**: No.
 - **Values**: Mocked (always returns a single mock listing).
 - **Limitations**: `REAL` mode throws `NOT_SUPPORTED` for catalog listing retrieval.
 
 ### 12. Shopify Webhooks
-- **Classification**: `WORKING_REAL`
+- **Classification**: `IMPLEMENTED_UNVERIFIED`
 - **Actual Source File**: `src/app/api/webhooks/shopify/route.ts`
 - **Production Network Requests**: Yes, accepts external POST request hooks.
 - **Values**: Real payload data.
 - **Limitations**: HMAC-SHA256 signature verification is skipped in DEMO mode if no secret is saved.
 
 ### 13. Shopify Order Processing
-- **Classification**: `WORKING_REAL`
+- **Classification**: `REAL_VERIFIED`
 - **Actual Source File**: `src/services/marketplace/eventProcessor.ts`
 - **Production Network Requests**: No.
 - **Values**: Real.
 - **Limitations**: Processes parsed Shopify `orders/create` payload and settles sales locally.
 
 ### 14. Shopify Outbound Inventory Sync
-- **Classification**: `PARTIAL`
+- **Classification**: `STUB`
 - **Actual Source File**: `src/services/marketplace/shopify.ts`, `src/services/marketplace/syncService.ts`
 - **Production Network Requests**: No.
 - **Values**: Mocked.
 - **Limitations**: `REAL` mode throws `NOT_SUPPORTED`.
 
 ### 15. Shopify Price Updates
-- **Classification**: `PARTIAL`
+- **Classification**: `STUB`
 - **Actual Source File**: `src/services/marketplace/shopify.ts`, `src/services/marketplace/syncService.ts`
 - **Production Network Requests**: No.
 - **Values**: Mocked.
@@ -175,7 +175,7 @@ This document outlines the current state of implementation for various features 
 - **Limitations**: No service pulls price data from price source adapters.
 
 ### 25. Pricing Recommendation Generation
-- **Classification**: `PARTIAL`
+- **Classification**: `DEMO_ONLY`
 - **Actual Source File**: `src/app/(dashboard)/pricing/page.tsx`
 - **Production Network Requests**: No.
 - **Values**: Seeded data.
@@ -189,28 +189,28 @@ This document outlines the current state of implementation for various features 
 - **Limitations**: No automated cron or scheduling mechanism refreshes pricing.
 
 ### 27. Background Retries
-- **Classification**: `PARTIAL`
+- **Classification**: `STUB`
 - **Actual Source File**: `src/services/marketplace/syncService.ts`
 - **Production Network Requests**: No.
 - **Values**: Simulated.
 - **Limitations**: Uses transient `setTimeout` timers instead of a durable queuing system. If server restarts, scheduled retries are lost.
 
 ### 28. Alerts
-- **Classification**: `WORKING_REAL`
+- **Classification**: `IMPLEMENTED_UNVERIFIED`
 - **Actual Source File**: `src/app/(dashboard)/alerts/page.tsx`, `src/components/AlertsManager.tsx`
 - **Production Network Requests**: No.
 - **Values**: Real.
 - **Limitations**: Monitors and displays active system issues.
 
 ### 29. Reconciliation
-- **Classification**: `PARTIAL`
+- **Classification**: `DEMO_ONLY`
 - **Actual Source File**: `src/app/(dashboard)/marketplaces/shopify/reconciliation/page.tsx`
 - **Production Network Requests**: No.
 - **Values**: Simulated.
 - **Limitations**: Compares db balances against listings, but listing counts are simulated mocks.
 
 ### 30. Analytics
-- **Classification**: `WORKING_REAL`
+- **Classification**: `IMPLEMENTED_UNVERIFIED`
 - **Actual Source File**: `src/app/(dashboard)/analytics/page.tsx`
 - **Production Network Requests**: No.
 - **Values**: Real.

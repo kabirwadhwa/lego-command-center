@@ -2,6 +2,7 @@ import prisma from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/auth";
 import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
+import { acceptPriceRecommendationAction } from "@/app/actions/marketplaceActions";
 import { Prisma } from "@prisma/client";
 import {
   ArrowLeft,
@@ -259,9 +260,14 @@ export default async function VariantDetailPage({
                     {recommendation.reasoning}
                   </p>
                   {user.role !== "VIEWER" && (
-                    <button className="text-[10px] font-bold text-blue-600 hover:text-blue-700 hover:underline mt-3 block">
-                      Accept and Update Listing Prices →
-                    </button>
+                    <form action={async () => {
+                      "use server";
+                      await acceptPriceRecommendationAction(recommendation.id);
+                    }}>
+                      <button type="submit" className="text-[10px] font-bold text-blue-600 hover:text-blue-700 hover:underline mt-3 block border-none bg-transparent p-0 cursor-pointer">
+                        Accept and Update Listing Prices →
+                      </button>
+                    </form>
                   )}
                 </div>
               </div>

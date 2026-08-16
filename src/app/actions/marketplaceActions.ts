@@ -495,3 +495,74 @@ export async function resolveReconciliationCorrectionAction(params: {
   }
 }
 
+/**
+ * Accepts a pricing recommendation, updates local listing prices, logs an audit trail, and schedules updates.
+ */
+export async function acceptPriceRecommendationAction(recommendationId: string) {
+  const user = await checkRole([UserRole.ADMIN, UserRole.FAMILY_SELLER]);
+
+  try {
+    const recommendation = await prisma.priceRecommendation.findUnique({
+      where: { id: recommendationId },
+      include: {
+        productVariant: {
+          include: {
+            product: true,
+            listings: true,
+          },
+        },
+      },
+    });
+
+    if (!recommendation) {
+      throw new Error("Pricing recommendation not found.");
+    }
+
+    const { productVariant } = recommendation;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.marketplaceListing.updateMany({
+        where: { productVariantId: productVariant.id },
+        data: {
+          price: recommendation.recommendedPrice,
+          lastSyncedAt: new Date(),
+        },
+      });
+
+      for (const listing of productVariant.listings) {
+        await tx.syncJob.create({
+          data: {
+            marketplace: listing.marketplace,
+            operation: "SYNC_PRICING",
+            productVariantId: productVariant.id,
+            status: SyncStatus.PENDING,
+          },
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          actorType: ActorType.USER,
+          actorId: user.id,
+          actorName: user.name,
+          action: "ACCEPT_PRICE_RECOMMENDATION",
+          details: `Accepted price recommendation of €${Number(recommendation.recommendedPrice).toFixed(2)} for ${productVariant.product.name} (Set: ${productVariant.product.setNumber}, SKU: ${productVariant.sku}).`,
+        },
+      });
+
+      await tx.priceRecommendation.delete({
+        where: { id: recommendationId },
+      });
+    });
+
+    revalidatePath("/pricing");
+    revalidatePath(`/inventory/${productVariant.id}`);
+    revalidatePath("/");
+    return { success: true as const };
+  } catch (err) {
+    console.error("Failed to accept price recommendation:", err);
+    const errorMsg = err instanceof Error ? err.message : "Failed to accept pricing suggestion.";
+    return { success: false as const, error: errorMsg };
+  }
+}
+

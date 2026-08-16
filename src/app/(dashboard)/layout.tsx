@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import prisma from "@/lib/prisma";
 import TransferModal from "@/components/TransferModal";
 import AdjustModal from "@/components/AdjustModal";
+import SellModal from "@/components/SellModal";
 
 export default async function DashboardLayout({
   children,
@@ -48,6 +49,7 @@ export default async function DashboardLayout({
       {/* Global Quick Action Modals */}
       <TransferModal variants={variants} accounts={accounts} />
       <AdjustModal variants={variants} accounts={accounts} />
+      <SellModal variants={variants} accounts={accounts} />
     </div>
   );
 }

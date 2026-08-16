@@ -112,11 +112,24 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
   const sessionUser = await getSessionUser();
   if (!sessionUser) return null;
 
-  const profile = await prisma.user.findUnique({
+  let profile = await prisma.user.findUnique({
     where: { id: sessionUser.id }
   });
 
-  if (!profile || profile.status !== "ACTIVE") {
+  // Auto-provision profile on first authentication
+  if (!profile) {
+    profile = await prisma.user.create({
+      data: {
+        id: sessionUser.id,
+        email: sessionUser.email,
+        name: sessionUser.email.split("@")[0] || "New User",
+        role: UserRole.VIEWER, // Fallback default role
+        status: "ACTIVE"
+      }
+    });
+  }
+
+  if (profile.status !== "ACTIVE") {
     return null;
   }
 

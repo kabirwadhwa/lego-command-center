@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { checkRole } from "@/lib/auth";
 import { InventoryService, PurchaseItemInput, SaleItemInput } from "@/services/inventoryService";
-import { UserRole, InventoryTransactionType, ActorType, ProductCondition } from "@prisma/client";
+import { UserRole, InventoryTransactionType, ActorType, ProductCondition, InventoryBalance, Prisma } from "@prisma/client";
 import prisma from "@/lib/prisma";
 
 /**
@@ -217,6 +217,151 @@ export async function createNewProductAction(params: {
     return { success: true as const, data: variant };
   } catch (err) {
     console.error("Create product variant action failed:", err);
+    const errorMsg = err instanceof Error ? err.message : "An unexpected error occurred.";
+    return { success: false as const, error: errorMsg };
+  }
+}
+
+/**
+ * Server action to bulk import inventory from parsed sheet rows.
+ */
+export async function bulkImportAction(params: {
+  inventoryAccountId: string;
+  rows: {
+    setNumber: string;
+    name?: string;
+    theme?: string;
+    sku?: string;
+    ean?: string;
+    condition: string;
+    quantity: number;
+    unitCost: number;
+    storageLocation?: string;
+  }[];
+}) {
+  const user = await checkRole([UserRole.ADMIN, UserRole.FAMILY_SELLER]);
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      let createdProductsCount = 0;
+      let createdVariantsCount = 0;
+      let transactionCount = 0;
+
+      for (const row of params.rows) {
+        // 1. Resolve product
+        let product = await tx.product.findUnique({
+          where: { setNumber: row.setNumber }
+        });
+
+        if (!product) {
+          product = await tx.product.create({
+            data: {
+              setNumber: row.setNumber,
+              name: row.name || `LEGO ${row.setNumber}`,
+              theme: row.theme || "Imported Theme",
+              ean: row.ean,
+              status: "ACTIVE",
+            }
+          });
+          createdProductsCount++;
+        }
+
+        // 2. Resolve variant SKU
+        const cond = row.condition as ProductCondition;
+        const generatedSku = row.sku || `LGO-${row.setNumber}-${cond}`;
+        
+        let variant = await tx.productVariant.findUnique({
+          where: { sku: generatedSku }
+        });
+
+        if (!variant) {
+          variant = await tx.productVariant.create({
+            data: {
+              productId: product.id,
+              sku: generatedSku,
+              condition: cond,
+              storageLocation: row.storageLocation,
+              status: "ACTIVE"
+            }
+          });
+          createdVariantsCount++;
+        }
+
+        // 3. Concurrency Lock: Select row FOR UPDATE
+        const balances = await tx.$queryRaw<InventoryBalance[]>`
+          SELECT * FROM "InventoryBalance"
+          WHERE "productVariantId" = ${variant.id}
+            AND "inventoryAccountId" = ${params.inventoryAccountId}
+          LIMIT 1 FOR UPDATE
+        `;
+
+        const existingBalance = balances[0];
+        if (existingBalance) {
+          const oldQty = existingBalance.quantity;
+          const oldAvgCost = Number(existingBalance.averageCost);
+          const newQty = oldQty + row.quantity;
+          const newAvgCost = (oldQty * oldAvgCost + row.quantity * row.unitCost) / newQty;
+
+          await tx.inventoryBalance.update({
+            where: { id: existingBalance.id },
+            data: {
+              quantity: newQty,
+              averageCost: new Prisma.Decimal(newAvgCost),
+              lastUpdated: new Date()
+            }
+          });
+        } else {
+          await tx.inventoryBalance.create({
+            data: {
+              productVariantId: variant.id,
+              inventoryAccountId: params.inventoryAccountId,
+              quantity: row.quantity,
+              averageCost: new Prisma.Decimal(row.unitCost)
+            }
+          });
+        }
+
+        // 4. Create immutable ledger movement (IMPORT)
+        await tx.inventoryTransaction.create({
+          data: {
+            productVariantId: variant.id,
+            inventoryAccountId: params.inventoryAccountId,
+            type: InventoryTransactionType.IMPORT,
+            quantity: row.quantity,
+            unitCost: new Prisma.Decimal(row.unitCost),
+            actorType: ActorType.USER,
+            actorId: user.id,
+            actorName: user.name,
+            notes: `Bulk imported inventory data`
+          }
+        });
+
+        transactionCount++;
+      }
+
+      // 5. Log administrative AuditLog
+      await tx.auditLog.create({
+        data: {
+          actorType: ActorType.USER,
+          actorId: user.id,
+          actorName: user.name,
+          action: "BULK_IMPORT",
+          details: `Successfully bulk imported ${transactionCount} inventory items. Created ${createdProductsCount} products and ${createdVariantsCount} variants.`
+        }
+      });
+
+      return {
+        processedCount: transactionCount,
+        createdProductsCount,
+        createdVariantsCount,
+      };
+    });
+
+    revalidatePath("/inventory");
+    revalidatePath("/");
+    return { success: true as const, data: result };
+  } catch (err) {
+    console.error("Bulk import failed:", err);
     const errorMsg = err instanceof Error ? err.message : "An unexpected error occurred.";
     return { success: false as const, error: errorMsg };
   }

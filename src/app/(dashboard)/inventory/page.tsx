@@ -170,13 +170,21 @@ export default async function InventoryPage({
           </p>
         </div>
         {user.role !== "VIEWER" && (
-          <Link
-            href="/inventory?action=add-product"
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-sm transition-colors"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Add LEGO Set</span>
-          </Link>
+          <div className="flex gap-2">
+            <Link
+              href="/inventory/import"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-white border border-slate-200 dark:bg-slate-900 dark:border-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg shadow-sm transition-colors"
+            >
+              <span>Import CSV</span>
+            </Link>
+            <Link
+              href="/inventory?action=add-product"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-sm transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add LEGO Set</span>
+            </Link>
+          </div>
         )}
       </div>
 

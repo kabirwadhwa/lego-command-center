@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import crypto from "crypto";
 import prisma from "@/lib/prisma";
 import { MarketplaceType, EventStatus } from "@prisma/client";
+import { MarketplaceEventProcessor } from "@/services/marketplace/eventProcessor";
 
 export async function POST(request: Request) {
   const hmacHeader = request.headers.get("x-shopify-hmac-sha256");
@@ -84,7 +85,13 @@ export async function POST(request: Request) {
       },
     });
 
-    return NextResponse.json({ success: true, eventId: event.id });
+    const procResult = await MarketplaceEventProcessor.processEvent(event.id);
+
+    if (!procResult.success) {
+      return NextResponse.json({ success: true, processed: false, error: procResult.error, eventId: event.id });
+    }
+
+    return NextResponse.json({ success: true, processed: true, eventId: event.id });
   } catch (err) {
     console.error("Shopify webhook processing error:", err);
     return new NextResponse("Internal Server Error", { status: 500 });

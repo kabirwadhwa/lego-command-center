@@ -25,7 +25,7 @@ jest.mock("@supabase/ssr", () => ({
 }));
 
 import { prisma, pool } from "@/lib/prisma";
-import { getSessionUser, getCurrentUser, checkRole } from "@/lib/auth";
+import { getCurrentUser, checkRole } from "@/lib/auth";
 import { UserRole } from "@prisma/client";
 
 describe("Supabase Auth User Identity and Provisioning Tests", () => {

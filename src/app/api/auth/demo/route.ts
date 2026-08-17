@@ -4,6 +4,18 @@ import { getAppMode, verifyDemoPassword } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
+function getRedirectUrl(path: string, request: Request): URL {
+  const host = request.headers.get("x-forwarded-host") || request.headers.get("host") || "";
+  const proto = request.headers.get("x-forwarded-proto") || "https";
+  
+  if (host) {
+    // If the host header contains a port (e.g. localhost:8080), the URL constructor handles it correctly.
+    // Ensure we use the forwarded host name to direct browser back to the public domain.
+    return new URL(path, `${proto}://${host}`);
+  }
+  return new URL(path, request.url);
+}
+
 export async function POST(request: Request) {
   try {
     const contentType = request.headers.get("content-type") || "";
@@ -25,17 +37,17 @@ export async function POST(request: Request) {
 
     const appMode = getAppMode();
     if (appMode === "production") {
-      return NextResponse.redirect(new URL("/login?error=forbidden_in_production", request.url));
+      return NextResponse.redirect(getRedirectUrl("/login?error=forbidden_in_production", request));
     }
 
     if (action === "verify-password") {
       if (!password) {
-        return NextResponse.redirect(new URL("/login?error=missing_password", request.url));
+        return NextResponse.redirect(getRedirectUrl("/login?error=missing_password", request));
       }
 
       const isValid = verifyDemoPassword(password);
       if (!isValid) {
-        return NextResponse.redirect(new URL("/login?error=incorrect_password", request.url));
+        return NextResponse.redirect(getRedirectUrl("/login?error=incorrect_password", request));
       }
 
       const cookieStore = await cookies();
@@ -47,19 +59,19 @@ export async function POST(request: Request) {
         maxAge: 60 * 60 * 24, // 24 hours
       });
 
-      return NextResponse.redirect(new URL("/login", request.url));
+      return NextResponse.redirect(getRedirectUrl("/login", request));
     }
 
     if (action === "login-profile") {
       if (appMode === "demo") {
         const cookieStore = await cookies();
         if (cookieStore.get("demo_access_token")?.value !== "true") {
-          return NextResponse.redirect(new URL("/login?error=unauthorized", request.url));
+          return NextResponse.redirect(getRedirectUrl("/login?error=unauthorized", request));
         }
       }
 
       if (!userId) {
-        return NextResponse.redirect(new URL("/login?error=missing_user_id", request.url));
+        return NextResponse.redirect(getRedirectUrl("/login?error=missing_user_id", request));
       }
 
       const allowedUserIds = [
@@ -69,7 +81,7 @@ export async function POST(request: Request) {
       ];
 
       if (!allowedUserIds.includes(userId)) {
-        return NextResponse.redirect(new URL("/login?error=invalid_user_id", request.url));
+        return NextResponse.redirect(getRedirectUrl("/login?error=invalid_user_id", request));
       }
 
       const cookieStore = await cookies();
@@ -81,19 +93,19 @@ export async function POST(request: Request) {
         maxAge: 60 * 60 * 24 * 7, // 1 week
       });
 
-      return NextResponse.redirect(new URL("/", request.url));
+      return NextResponse.redirect(getRedirectUrl("/", request));
     }
 
     if (action === "logout") {
       const cookieStore = await cookies();
       cookieStore.delete("lego_demo_user_id");
       cookieStore.delete("demo_access_token");
-      return NextResponse.redirect(new URL("/login", request.url));
+      return NextResponse.redirect(getRedirectUrl("/login", request));
     }
 
-    return NextResponse.redirect(new URL("/login?error=invalid_action", request.url));
+    return NextResponse.redirect(getRedirectUrl("/login?error=invalid_action", request));
   } catch (error) {
     console.error("Demo auth API error:", error);
-    return NextResponse.redirect(new URL("/login?error=server_error", request.url));
+    return NextResponse.redirect(getRedirectUrl("/login?error=server_error", request));
   }
 }

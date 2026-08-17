@@ -1,6 +1,7 @@
 "use server";
 
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { getAppMode, verifyDemoPassword } from "@/lib/auth";
 
 /**
@@ -26,6 +27,72 @@ export async function authenticateDemoAccessAction(password: string): Promise<{ 
   });
 
   return { success: true };
+}
+
+/**
+ * Form action to verify the demo password and set the demo access token.
+ */
+export async function verifyDemoPasswordFormAction(formData: FormData): Promise<void> {
+  if (getAppMode() !== "demo") {
+    redirect("/login?error=not_in_demo_mode");
+  }
+
+  const password = formData.get("password") as string;
+  if (!password) {
+    redirect("/login?error=missing_password");
+  }
+
+  const isValid = verifyDemoPassword(password);
+  if (!isValid) {
+    redirect("/login?error=incorrect_password");
+  }
+
+  const cookieStore = await cookies();
+  cookieStore.set("demo_access_token", "true", {
+    path: "/",
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    maxAge: 60 * 60 * 24, // 24 hours
+  });
+
+  redirect("/login");
+}
+
+/**
+ * Form action to sign in with a selected demo profile.
+ */
+export async function loginWithDemoProfileFormAction(formData: FormData): Promise<void> {
+  const appMode = getAppMode();
+  if (appMode === "production") {
+    redirect("/login?error=forbidden_in_production");
+  }
+
+  const userId = formData.get("userId") as string;
+  if (!userId) {
+    redirect("/login?error=missing_user_id");
+  }
+
+  const allowedUserIds = [
+    "44444444-4444-4444-4444-444444444444", // Kristof (ADMIN)
+    "55555555-5555-5555-5555-555555555555", // Sabine (FAMILY_SELLER)
+    "66666666-6666-6666-6666-666666666666", // Assistant (VIEWER)
+  ];
+
+  if (!allowedUserIds.includes(userId)) {
+    redirect("/login?error=invalid_user_id");
+  }
+
+  const cookieStore = await cookies();
+  cookieStore.set("lego_demo_user_id", userId, {
+    path: "/",
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    maxAge: 60 * 60 * 24 * 7, // 1 week
+  });
+
+  redirect("/");
 }
 
 /**

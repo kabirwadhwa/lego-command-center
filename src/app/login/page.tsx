@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser, getAppMode } from "@/lib/auth";
 import { cookies } from "next/headers";
-import { authenticateDemoAccessAction } from "@/app/actions/authActions";
+import { verifyDemoPasswordFormAction, loginWithDemoProfileFormAction } from "@/app/actions/authActions";
 
 export const dynamic = "force-dynamic";
 
@@ -17,36 +17,6 @@ export default async function LoginPage() {
 
   const cookieStore = await cookies();
   const hasDemoAccess = cookieStore.get("demo_access_token")?.value === "true";
-
-  // Action for logging in using simulated demo profiles
-  const handleDemoLogin = async (formData: FormData) => {
-    "use server";
-    const userId = formData.get("userId") as string;
-    if (userId) {
-      const cookieStore = await cookies();
-      cookieStore.set("lego_demo_user_id", userId, {
-        path: "/",
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-      });
-      redirect("/");
-    }
-  };
-
-  // Action to verify demo password
-  const handleDemoPasswordSubmit = async (formData: FormData) => {
-    "use server";
-    const password = formData.get("password") as string;
-    if (password) {
-      const res = await authenticateDemoAccessAction(password);
-      if (res.success) {
-        redirect("/login"); // Reload to show the choose profile switcher
-      } else {
-        redirect("/login?error=incorrect_password");
-      }
-    }
-  };
 
   return (
     <div className="min-h-screen bg-slate-900 flex items-center justify-center font-sans p-6">
@@ -66,7 +36,7 @@ export default async function LoginPage() {
 
         {appMode === "demo" && !hasDemoAccess ? (
           /* Password input for Demo Access Gate */
-          <form action={handleDemoPasswordSubmit} className="flex flex-col space-y-4">
+          <form action={verifyDemoPasswordFormAction} className="flex flex-col space-y-4">
             <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 text-xs text-amber-300 font-medium leading-relaxed">
               <strong>Protected Demo Environment</strong>: Access requires the demo password.
             </div>
@@ -93,7 +63,7 @@ export default async function LoginPage() {
           </form>
         ) : appMode !== "production" ? (
           /* Demo Mode Switcher Card */
-          <form action={handleDemoLogin} className="flex flex-col space-y-4">
+          <form action={loginWithDemoProfileFormAction} className="flex flex-col space-y-4">
             <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 text-xs text-blue-300 font-medium leading-relaxed">
               <strong>Demo Environment Active</strong>: Select a seed user profile to simulate authenticated session roles.
             </div>

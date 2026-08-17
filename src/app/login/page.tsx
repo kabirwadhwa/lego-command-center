@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
 import { getCurrentUser, getAppMode } from "@/lib/auth";
 import { cookies } from "next/headers";
-import { verifyDemoPasswordFormAction, loginWithDemoProfileFormAction } from "@/app/actions/authActions";
 
 export const dynamic = "force-dynamic";
 
@@ -36,7 +35,8 @@ export default async function LoginPage() {
 
         {appMode === "demo" && !hasDemoAccess ? (
           /* Password input for Demo Access Gate */
-          <form action={verifyDemoPasswordFormAction} className="flex flex-col space-y-4">
+          <form action="/api/auth/demo" method="POST" className="flex flex-col space-y-4">
+            <input type="hidden" name="action" value="verify-password" />
             <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 text-xs text-amber-300 font-medium leading-relaxed">
               <strong>Protected Demo Environment</strong>: Access requires the demo password.
             </div>
@@ -63,7 +63,8 @@ export default async function LoginPage() {
           </form>
         ) : appMode !== "production" ? (
           /* Demo Mode Switcher Card */
-          <form action={loginWithDemoProfileFormAction} className="flex flex-col space-y-4">
+          <form action="/api/auth/demo" method="POST" className="flex flex-col space-y-4">
+            <input type="hidden" name="action" value="login-profile" />
             <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 text-xs text-blue-300 font-medium leading-relaxed">
               <strong>Demo Environment Active</strong>: Select a seed user profile to simulate authenticated session roles.
             </div>

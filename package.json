@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "jest --runInBand"
+    "test": "jest --runInBand",
+    "worker": "ts-node src/worker.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",

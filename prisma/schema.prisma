@@ -374,6 +374,10 @@ model SyncJob {
   productVariant   ProductVariant? @relation(fields: [productVariantId], references: [id], onDelete: Restrict)
   status           SyncStatus      @default(PENDING)
   attemptNumber    Int             @default(1)
+  attemptCount     Int             @default(0)
+  nextAttemptAt    DateTime        @default(now())
+  lockedAt         DateTime?
+  lockedBy         String?
   createdAt        DateTime        @default(now())
   startedAt        DateTime?
   completedAt      DateTime?

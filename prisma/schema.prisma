@@ -327,6 +327,10 @@ model MarketplaceListing {
   quantity           Int
   lastSyncedAt       DateTime        @default(now())
 
+  // Shopify GraphQL ID preservation
+  shopifyInventoryItemId String?
+  shopifyLocationId      String?
+
   // Catawiki-specific auction fields
   catawikiCurrentBid Decimal?        @db.Decimal(12, 2)
   catawikiReserve    Decimal?        @db.Decimal(12, 2)

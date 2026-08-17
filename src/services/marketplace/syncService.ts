@@ -100,7 +100,7 @@ export class SyncService {
 
       // 3. Invoke Marketplace Adapter
       const adapter = await MarketplaceFactory.getAdapter(job.marketplace);
-      const result = await adapter.syncInventory(variant.sku, totalCompanyQuantity);
+      const result = await adapter.syncInventory(variant.sku, totalCompanyQuantity, jobId);
 
       if (result.success) {
         await prisma.syncJob.update({

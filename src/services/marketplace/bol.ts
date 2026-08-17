@@ -46,7 +46,7 @@ export class BolAdapter implements MarketplaceAdapter {
     return orders.find((o) => o.externalOrderId === externalOrderId) || null;
   }
 
-  async syncInventory(sku: string, quantity: number): Promise<{ success: boolean; status: SyncStatus; error?: string }> {
+  async syncInventory(sku: string, quantity: number, _jobId?: string): Promise<{ success: boolean; status: SyncStatus; error?: string }> {
     if (this.mode === "DEMO") {
       console.log(`[DEMO Bol] Synced SKU ${sku} quantity to ${quantity}`);
       return { success: true, status: "SUCCESS" };

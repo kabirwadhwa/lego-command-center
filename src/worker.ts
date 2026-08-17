@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { PrismaClient, SyncOperation, SyncStatus, AlertType, AlertSeverity, SyncJob } from "@prisma/client";
 import crypto from "crypto";
 import { MarketplaceFactory } from "./services/marketplace/factory";
@@ -47,7 +48,7 @@ async function executeJob(job: SyncJob): Promise<void> {
 
         // 3. Invoke Marketplace Adapter
         const adapter = await MarketplaceFactory.getAdapter(job.marketplace);
-        const result = await adapter.syncInventory(variant.sku, totalQuantity);
+        const result = await adapter.syncInventory(variant.sku, totalQuantity, job.id);
 
         if (!result.success) {
           throw new Error(result.error || "Adapter reported inventory sync failure.");
@@ -55,9 +56,23 @@ async function executeJob(job: SyncJob): Promise<void> {
         break;
       }
 
-      case SyncOperation.SYNC_PRICE:
-        console.log(`[Worker ${WORKER_ID}] Price sync placeholder executed successfully for job ${job.id}`);
+      case SyncOperation.SYNC_PRICE: {
+        if (!job.productVariantId) {
+          throw new Error("Job is missing productVariantId.");
+        }
+        const listing = await prisma.marketplaceListing.findFirst({
+          where: { productVariantId: job.productVariantId, marketplace: job.marketplace },
+        });
+        if (!listing) {
+          throw new Error(`No listing found for variant ${job.productVariantId} on ${job.marketplace}`);
+        }
+        const adapter = await MarketplaceFactory.getAdapter(job.marketplace);
+        const result = await (adapter as any).updatePrice(listing.externalListingId, Number(listing.price));
+        if (!result.success) {
+          throw new Error(result.error || "Price update failed.");
+        }
         break;
+      }
 
       case SyncOperation.REFRESH_PRICE_OBSERVATIONS:
         console.log(`[Worker ${WORKER_ID}] Price observations refresh placeholder executed successfully for job ${job.id}`);

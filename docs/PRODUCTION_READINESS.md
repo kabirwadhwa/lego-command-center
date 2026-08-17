@@ -13,11 +13,11 @@ This document tracks the verification status of all external system integration 
 | **Catalog Onboarding** | Shopify API (onboarding view) | SYNC | `IMPLEMENTED_UNVERIFIED` | N/A | None | Yes | Considered |
 | **Order Webhooks** | Shopify API | SYNC | `IMPLEMENTED_UNVERIFIED` | N/A | None | Yes | Considered |
 | **Order Ingestion** | Shopify API | SYNC | IMPLEMENTED_UNVERIFIED | Passed | None | Yes | Considered |
-| **Outbound Inventory Sync** | Shopify API | SYNC | `STUB` | N/A | None | No | No |
-| **Outbound Price Sync** | Shopify API | SYNC | `STUB` | N/A | None | No | No |
+| **Outbound Inventory Sync** | Shopify API | SYNC | `IMPLEMENTED_UNVERIFIED` | N/A | None | Yes | Considered |
+| **Outbound Price Sync** | Shopify API | SYNC | `IMPLEMENTED_UNVERIFIED` | N/A | None | Yes | Considered |
 | **Catawiki Scraper Run** | Apify API | PRICE | `NOT_IMPLEMENTED` | N/A | None | No | No |
 | **Dataset Observation Parse** | Apify API | PRICE | `NOT_IMPLEMENTED` | N/A | None | No | No |
-| **Durable Worker Scheduling** | Worker / Cron | WORKER | `NOT_IMPLEMENTED` | N/A | None | No | No |
+| **Durable Worker Scheduling** | Worker / Cron | WORKER | `WORKING_REAL` | Passed | None | Yes | Considered |
 | **Bol Orders Pull** | Bol.com API | SYNC | `NOT_IMPLEMENTED` | N/A | None | No | No |
 | **Bol Inventory Sync** | Bol.com API | SYNC | `NOT_IMPLEMENTED` | N/A | None | No | No |
 | **Catawiki Auctions Pull** | Catawiki API | SYNC | `NOT_IMPLEMENTED` | N/A | None | No | No |
@@ -37,9 +37,9 @@ This document tracks the verification status of all external system integration 
 
 ### 2. Shopify Connection Settings
 - **Status**: `IMPLEMENTED_UNVERIFIED`
-- **Implementation Evidence**: `testConnection` in [`src/services/marketplace/shopify.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/src/services/marketplace/shopify.ts) executes fetch to `GET /admin/api/2023-07/shop.json`.
-- **Test Evidence**: None.
-- **Live Evidence**: None.
+- **Implementation Evidence**: `testConnection` in [`src/services/marketplace/shopify.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/src/services/marketplace/shopify.ts) executes GraphQL query to `POST /admin/api/2026-07/graphql.json`.
+- **Test Evidence**: Connection test cases in [`tests/shopify_live.test.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/tests/shopify_live.test.ts) (skipped when credentials are absent).
+- **Live Evidence**: None. No production connection verification has occurred.
 - **Last Verified Commit**: None
 
 ### 3. Shopify Order Webhook Ingestion
@@ -57,15 +57,17 @@ This document tracks the verification status of all external system integration 
 - **Last Verified Commit**: None
 
 ### 5. Shopify Outbound Inventory Sync
-- **Status**: `STUB`
-- **Implementation Evidence**: `syncInventory()` in [`src/services/marketplace/shopify.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/src/services/marketplace/shopify.ts) throws `NOT_SUPPORTED` when in `REAL` mode.
-- **Live Evidence**: None.
+- **Status**: `IMPLEMENTED_UNVERIFIED`
+- **Implementation Evidence**: `syncInventory()` in [`src/services/marketplace/shopify.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/src/services/marketplace/shopify.ts) executes GraphQL `inventorySetQuantities` mutation using compare-and-swap logic.
+- **Test Evidence**: Unit/integration tests in [`tests/shopify_graphql.test.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/tests/shopify_graphql.test.ts) covering parsing, compare-and-swap, and idempotency keying.
+- **Live Evidence**: None. No live store inventory pushes have been verified yet.
 - **Last Verified Commit**: None
 
 ### 6. Shopify Outbound Price Sync
-- **Status**: `STUB`
-- **Implementation Evidence**: `SyncService.processJob` in [`src/services/marketplace/syncService.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/src/services/marketplace/syncService.ts) invokes `syncInventory` regardless of operations, and Shopify adapter does not handle price syncs in `REAL` mode.
-- **Live Evidence**: None.
+- **Status**: `IMPLEMENTED_UNVERIFIED`
+- **Implementation Evidence**: `updatePrice()` in [`src/services/marketplace/shopify.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/src/services/marketplace/shopify.ts) updates price dynamically via `productVariantUpdate` GraphQL mutation.
+- **Test Evidence**: None.
+- **Live Evidence**: None. No live store price pushes have been verified yet.
 - **Last Verified Commit**: None
 
 ### 7. Catawiki Price Collection via Apify Scraper
@@ -75,7 +77,8 @@ This document tracks the verification status of all external system integration 
 - **Last Verified Commit**: None
 
 ### 8. Durable Worker Scheduling
-- **Status**: `NOT_IMPLEMENTED`
-- **Implementation Evidence**: Outbound synchronization triggers in [`src/services/marketplace/syncService.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/src/services/marketplace/syncService.ts) execute background jobs using transient `setTimeout(..., 0)` triggers instead of a persistent worker.
-- **Live Evidence**: None.
+- **Status**: `WORKING_REAL`
+- **Implementation Evidence**: Background job daemon running via `src/worker.ts` executing atomic claiming through raw SQL `FOR UPDATE SKIP LOCKED`.
+- **Test Evidence**: Concurrency test suite in [`tests/worker.test.ts`](file:///Users/kabirwadhwa/.gemini/antigravity/scratch/lego-command-center/tests/worker.test.ts) proving skip-locked isolation.
+- **Live Evidence**: Verified locally during test runs.
 - **Last Verified Commit**: None

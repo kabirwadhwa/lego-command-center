@@ -77,11 +77,11 @@ This document outlines the current state of implementation for various features 
 - **Limitations**: Verifies access token connectivity with Shopify API.
 
 ### 11. Shopify Product Import
-- **Classification**: `DEMO_ONLY`
+- **Classification**: `IMPLEMENTED_UNVERIFIED`
 - **Actual Source File**: `src/services/marketplace/shopify.ts`, `src/components/ShopifyImportWizard.tsx`
-- **Production Network Requests**: No.
-- **Values**: Mocked (always returns a single mock listing).
-- **Limitations**: `REAL` mode throws `NOT_SUPPORTED` for catalog listing retrieval.
+- **Production Network Requests**: Yes, in `REAL` mode executes Shopify Admin GraphQL `products` query with page-by-page cursor pagination.
+- **Values**: Real.
+- **Limitations**: Full production connection has not yet been verified via external dev store execution in production.
 
 ### 12. Shopify Webhooks
 - **Classification**: `IMPLEMENTED_UNVERIFIED`
@@ -98,18 +98,19 @@ This document outlines the current state of implementation for various features 
 - **Limitations**: Processes parsed Shopify `orders/create` payload and settles sales locally. Tested locally via mock order payloads in integration tests, but unverified using real Shopify network requests.
 
 ### 14. Shopify Outbound Inventory Sync
-- **Classification**: `STUB`
+- **Classification**: `IMPLEMENTED_UNVERIFIED`
 - **Actual Source File**: `src/services/marketplace/shopify.ts`, `src/services/marketplace/syncService.ts`
-- **Production Network Requests**: No.
-- **Values**: Mocked.
-- **Limitations**: `REAL` mode throws `NOT_SUPPORTED`.
+- **Production Network Requests**: Yes, in `REAL` mode executes `inventorySetQuantities` mutation using compare-and-swap constraints.
+- **Values**: Real.
+- **Limitations**: Safe comparison checks block updates if remote values deviate from last known database values.
+- **Idempotency**: Pushes are tracked using unique deterministic `shopify-sync-${jobId}` keys.
 
 ### 15. Shopify Price Updates
-- **Classification**: `STUB`
+- **Classification**: `IMPLEMENTED_UNVERIFIED`
 - **Actual Source File**: `src/services/marketplace/shopify.ts`, `src/services/marketplace/syncService.ts`
-- **Production Network Requests**: No.
-- **Values**: Mocked.
-- **Limitations**: `REAL` mode throws `NOT_SUPPORTED` for price pushes.
+- **Production Network Requests**: Yes, in `REAL` mode executes `productVariantUpdate` GraphQL mutation.
+- **Values**: Real.
+- **Limitations**: Price updates are pushed automatically in the background when price recommendations are accepted.
 
 ### 16. Bol Orders
 - **Classification**: `NOT_IMPLEMENTED`

@@ -11,10 +11,10 @@ export interface MarketplaceOrder {
     unitSalePrice: number;
   }[];
   grossRevenue: number;
-  marketplaceFees: number;
+  marketplaceFees: number | null;
   shippingRevenue: number;
   discount: number;
-  netRevenue: number;
+  netRevenue: number | null;
 }
 
 export interface MarketplaceListing {
@@ -25,6 +25,10 @@ export interface MarketplaceListing {
   quantity: number;
   listingUrl?: string;
   status: string;
+
+  // Shopify specific fields
+  shopifyInventoryItemId?: string | null;
+  shopifyLocationId?: string | null;
   
   // Catawiki specific fields
   catawikiCurrentBid?: number;
@@ -57,7 +61,7 @@ export interface MarketplaceCapabilities {
 export interface MarketplaceAdapter {
   getOrders(): Promise<MarketplaceOrder[]>;
   getOrder(externalOrderId: string): Promise<MarketplaceOrder | null>;
-  syncInventory(sku: string, quantity: number): Promise<{ success: boolean; status: SyncStatus; error?: string }>;
+  syncInventory(sku: string, quantity: number, jobId?: string): Promise<{ success: boolean; status: SyncStatus; error?: string }>;
   getListing(externalListingId: string): Promise<MarketplaceListing | null>;
   getListings(): Promise<MarketplaceListing[]>;
   getMarketPrices(sku: string): Promise<MarketplacePriceObservation[]>;

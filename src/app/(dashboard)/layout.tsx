@@ -8,6 +8,8 @@ import AdjustModal from "@/components/AdjustModal";
 import SellModal from "@/components/SellModal";
 import React from "react";
 
+export const dynamic = "force-dynamic";
+
 export default async function DashboardLayout({
   children,
 }: {
@@ -22,15 +24,22 @@ export default async function DashboardLayout({
   }
 
   // Query database configuration details for quick action modals
-  const variants = await prisma.productVariant.findMany({
-    where: { status: "ACTIVE" },
-    include: { product: true },
-    orderBy: { sku: "asc" },
-  });
+  let variants: any[] = [];
+  let accounts: any[] = [];
 
-  const accounts = await prisma.inventoryAccount.findMany({
-    where: { status: "ACTIVE" },
-  });
+  try {
+    variants = await prisma.productVariant.findMany({
+      where: { status: "ACTIVE" },
+      include: { product: true },
+      orderBy: { sku: "asc" },
+    });
+
+    accounts = await prisma.inventoryAccount.findMany({
+      where: { status: "ACTIVE" },
+    });
+  } catch (err) {
+    console.warn("Database queries failed in DashboardLayout, falling back to empty list:", err);
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 transition-colors duration-200">

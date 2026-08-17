@@ -15,13 +15,19 @@ export default async function AnalyticsPage() {
   });
 
   const grossRevenue = sales.reduce((sum, s) => sum + Number(s.grossRevenue), 0);
-  const netRevenue = sales.reduce((sum, s) => sum + Number(s.netRevenue), 0);
-  const fees = sales.reduce((sum, s) => sum + Number(s.marketplaceFees), 0);
+  
+  const hasUnknownFees = sales.some(s => s.marketplaceFees === null);
+  const fees = sales.reduce((sum, s) => sum + (s.marketplaceFees !== null ? Number(s.marketplaceFees) : 0), 0);
+  
+  const hasUnknownNetRev = sales.some(s => s.netRevenue === null);
+  const netRevenue = sales.reduce((sum, s) => sum + (s.netRevenue !== null ? Number(s.netRevenue) : 0), 0);
+
   const shippingCost = sales.reduce((sum, s) => sum + Number(s.shippingCost), 0);
   const discounts = sales.reduce((sum, s) => sum + Number(s.discount), 0);
 
+  const hasUnknownCogs = sales.some(s => s.items.some(item => item.unitCostAtSale === null));
   const cogs = sales.reduce((sum, s) => {
-    return sum + s.items.reduce((s2, item) => s2 + item.quantity * Number(item.unitCostAtSale), 0);
+    return sum + s.items.reduce((s2, item) => s2 + (item.unitCostAtSale !== null ? item.quantity * Number(item.unitCostAtSale) : 0), 0);
   }, 0);
 
   const netProfit = netRevenue - cogs;
@@ -141,33 +147,33 @@ export default async function AnalyticsPage() {
         {/* Cost of Goods Sold */}
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-sm">
           <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider block">
-            Cost of Goods Sold (COGS)
+            Cost of Goods Sold (COGS) {hasUnknownCogs && <span className="text-amber-500 text-[9px] font-bold ml-1 bg-amber-500/10 px-1.5 py-0.5 rounded">PARTIAL</span>}
           </span>
           <span className="text-2xl font-black text-slate-900 dark:text-white mt-3 block">
             {fmt(cogs)}
           </span>
           <p className="text-[10px] text-slate-400 mt-1 font-semibold">
-            Calculated from historic acquisition averages
+            {hasUnknownCogs ? "Warning: Some variant costs are unknown" : "Calculated from historic acquisition averages"}
           </p>
         </div>
 
         {/* Net Profit */}
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-sm">
           <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider block">
-            Net Profit (Settled)
+            Net Profit {(hasUnknownNetRev || hasUnknownCogs || hasUnknownFees) && <span className="text-amber-500 text-[9px] font-bold ml-1 bg-amber-500/10 px-1.5 py-0.5 rounded">ESTIMATED</span>}
           </span>
           <span className="text-2xl font-black text-slate-900 dark:text-white mt-3 block">
             {fmt(netProfit)}
           </span>
           <p className="text-[10px] text-emerald-500 mt-1 font-semibold">
-            Deducted fees, shipping costs, discounts
+            {hasUnknownFees ? "Fees unknown for some orders" : "Deducted fees, shipping costs, discounts"}
           </p>
         </div>
 
         {/* Operating Margin */}
         <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-sm">
           <span className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider block">
-            Operating Net Margin
+            Operating Net Margin {(hasUnknownNetRev || hasUnknownCogs || hasUnknownFees) && <span className="text-amber-500 text-[9px] font-bold ml-1 bg-amber-500/10 px-1.5 py-0.5 rounded">ESTIMATED</span>}
           </span>
           <span className="text-2xl font-black text-slate-900 dark:text-white mt-3 block">
             {marginPercentage.toFixed(2)}%
@@ -227,7 +233,7 @@ export default async function AnalyticsPage() {
               <span className="font-extrabold text-slate-900 dark:text-white">{fmt(grossRevenue)}</span>
             </div>
             <div className="flex justify-between pt-3.5">
-              <span>(-) Marketplace Transaction Fees</span>
+              <span>(-) Marketplace Transaction Fees {hasUnknownFees && <span className="text-amber-500 text-[9px] font-bold ml-1 bg-amber-500/10 px-1.5 py-0.5 rounded">ESTIMATED</span>}</span>
               <span className="text-red-500 font-bold">-{fmt(fees)}</span>
             </div>
             <div className="flex justify-between pt-3.5">
@@ -239,15 +245,15 @@ export default async function AnalyticsPage() {
               <span className="text-red-500 font-bold">-{fmt(discounts)}</span>
             </div>
             <div className="flex justify-between pt-3.5 border-t border-slate-200 dark:border-slate-800 font-extrabold text-slate-900 dark:text-white">
-              <span>Net Settled Revenue</span>
+              <span>Net Settled Revenue {hasUnknownNetRev && <span className="text-amber-500 text-[9px] font-bold ml-1 bg-amber-500/10 px-1.5 py-0.5 rounded">ESTIMATED</span>}</span>
               <span>{fmt(netRevenue)}</span>
             </div>
             <div className="flex justify-between pt-3.5">
-              <span>(-) Cost of Goods Sold (COGS)</span>
+              <span>(-) Cost of Goods Sold (COGS) {hasUnknownCogs && <span className="text-amber-500 text-[9px] font-bold ml-1 bg-amber-500/10 px-1.5 py-0.5 rounded">PARTIAL</span>}</span>
               <span className="text-red-500 font-bold">-{fmt(cogs)}</span>
             </div>
             <div className="flex justify-between pt-3.5 border-t-2 border-slate-200 dark:border-slate-800 font-black text-sm text-slate-950 dark:text-white bg-slate-50 dark:bg-slate-950 p-2.5 rounded-lg">
-              <span>Net Profit</span>
+              <span>Net Profit {(hasUnknownNetRev || hasUnknownCogs || hasUnknownFees) && <span className="text-amber-500 text-[9px] font-bold ml-1 bg-amber-500/10 px-1.5 py-0.5 rounded">ESTIMATED</span>}</span>
               <span className="text-emerald-600">{fmt(netProfit)}</span>
             </div>
           </div>

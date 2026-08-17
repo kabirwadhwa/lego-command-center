@@ -25,7 +25,7 @@ jest.mock("@supabase/ssr", () => ({
 }));
 
 import { prisma, pool } from "@/lib/prisma";
-import { getCurrentUser, isDemoAuthEnabled } from "@/lib/auth";
+import { getCurrentUser, isDemoAuthEnabled, verifyDemoPassword, scryptHash } from "@/lib/auth";
 import { switchDemoUser } from "@/app/actions/authActions";
 import { UserRole } from "@prisma/client";
 
@@ -158,5 +158,42 @@ describe("Supabase Auth User Identity, Hardening & Security separation tests", (
     expect(dbProfile).not.toBeNull();
     expect(dbProfile?.id).toBe(testUserUuid);
     expect(dbProfile?.email).toBe(testUserEmail);
+  });
+
+  describe("Demo Password Hashing Scrypt Tests", () => {
+    const password = "my-secret-password";
+    let originalHash: string | undefined;
+
+    beforeAll(() => {
+      originalHash = process.env.DEMO_PASSWORD_HASH;
+    });
+
+    afterAll(() => {
+      process.env.DEMO_PASSWORD_HASH = originalHash;
+    });
+
+    test("correct password succeeds", () => {
+      process.env.DEMO_PASSWORD_HASH = scryptHash(password);
+      expect(verifyDemoPassword(password)).toBe(true);
+    });
+
+    test("incorrect password fails", () => {
+      process.env.DEMO_PASSWORD_HASH = scryptHash(password);
+      expect(verifyDemoPassword("wrong-password")).toBe(false);
+    });
+
+    test("malformed stored hash fails closed", () => {
+      process.env.DEMO_PASSWORD_HASH = "scrypt$invalid$format";
+      expect(verifyDemoPassword(password)).toBe(false);
+
+      process.env.DEMO_PASSWORD_HASH = "invalid_hash_value_without_dollars";
+      expect(verifyDemoPassword(password)).toBe(false);
+    });
+
+    test("production mode cannot use demo password auth regardless of configuration", () => {
+      process.env.APP_MODE = "production";
+      process.env.ENABLE_DEMO_AUTH = "true";
+      expect(isDemoAuthEnabled()).toBe(false);
+    });
   });
 });

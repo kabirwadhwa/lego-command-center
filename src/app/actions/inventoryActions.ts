@@ -296,17 +296,29 @@ export async function bulkImportAction(params: {
         `;
 
         const existingBalance = balances[0];
+        const unitCostVal = (row.unitCost !== undefined && row.unitCost !== null) ? Number(row.unitCost) : null;
+        let newAvgCost: number | null = null;
+
         if (existingBalance) {
           const oldQty = existingBalance.quantity;
-          const oldAvgCost = Number(existingBalance.averageCost);
+          const oldAvgCost = existingBalance.averageCost !== null ? Number(existingBalance.averageCost) : null;
           const newQty = oldQty + row.quantity;
-          const newAvgCost = (oldQty * oldAvgCost + row.quantity * row.unitCost) / newQty;
+
+          if (oldAvgCost === null && unitCostVal === null) {
+            newAvgCost = null;
+          } else if (oldAvgCost === null && unitCostVal !== null) {
+            newAvgCost = unitCostVal;
+          } else if (oldAvgCost !== null && unitCostVal === null) {
+            newAvgCost = oldAvgCost;
+          } else if (oldAvgCost !== null && unitCostVal !== null) {
+            newAvgCost = (oldQty * oldAvgCost + row.quantity * unitCostVal) / newQty;
+          }
 
           await tx.inventoryBalance.update({
             where: { id: existingBalance.id },
             data: {
               quantity: newQty,
-              averageCost: new Prisma.Decimal(newAvgCost),
+              averageCost: newAvgCost !== null ? new Prisma.Decimal(newAvgCost) : null,
               lastUpdated: new Date()
             }
           });
@@ -316,7 +328,7 @@ export async function bulkImportAction(params: {
               productVariantId: variant.id,
               inventoryAccountId: params.inventoryAccountId,
               quantity: row.quantity,
-              averageCost: new Prisma.Decimal(row.unitCost)
+              averageCost: unitCostVal !== null ? new Prisma.Decimal(unitCostVal) : null
             }
           });
         }
@@ -328,7 +340,7 @@ export async function bulkImportAction(params: {
             inventoryAccountId: params.inventoryAccountId,
             type: InventoryTransactionType.IMPORT,
             quantity: row.quantity,
-            unitCost: new Prisma.Decimal(row.unitCost),
+            unitCost: unitCostVal !== null ? new Prisma.Decimal(unitCostVal) : null,
             actorType: ActorType.USER,
             actorId: user.id,
             actorName: user.name,

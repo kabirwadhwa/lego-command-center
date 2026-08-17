@@ -65,15 +65,17 @@ export default async function SalesPage() {
             </div>
           ) : (
             sales.map((sale) => {
-              // Calculate derived totals
-              const cogs = sale.items.reduce((sum, item) => {
-                return sum + item.quantity * Number(item.unitCostAtSale);
-              }, 0);
+              const hasUnknownCost = sale.items.some(item => item.unitCostAtSale === null);
+              const cogs = hasUnknownCost 
+                ? null 
+                : sale.items.reduce((sum, item) => sum + item.quantity * Number(item.unitCostAtSale), 0);
+              
               const gross = Number(sale.grossRevenue);
-              const fees = Number(sale.marketplaceFees);
+              const fees = sale.marketplaceFees !== null ? Number(sale.marketplaceFees) : null;
               const shippingCost = Number(sale.shippingCost);
-              const profit = Number(sale.netRevenue) - cogs;
-              const margin = gross > 0 ? (profit / gross) * 100 : 0;
+              const netRevenueVal = sale.netRevenue !== null ? Number(sale.netRevenue) : null;
+              const profit = (netRevenueVal === null || cogs === null) ? null : netRevenueVal - cogs;
+              const margin = (profit === null || gross === 0) ? null : (profit / gross) * 100;
 
               return (
                 <div key={sale.id} className="p-6 space-y-4">
@@ -131,15 +133,25 @@ export default async function SalesPage() {
                     {/* Financial Reconciliation Breakdown */}
                     <div className="border-t border-slate-200 dark:border-slate-800 pt-3 flex flex-wrap justify-between gap-4 text-[10px] text-slate-500 font-bold uppercase tracking-wide">
                       <div className="flex gap-4">
-                        <span>COGS: <strong className="text-slate-700 dark:text-slate-300 font-bold normal-case">{fmt(cogs)}</strong></span>
-                        {fees > 0 && <span>Fees: <strong className="text-slate-700 dark:text-slate-300 font-bold normal-case">{fmt(fees)}</strong></span>}
+                        <span>COGS: <strong className="text-slate-700 dark:text-slate-300 font-bold normal-case">{cogs !== null ? fmt(cogs) : "Unknown"}</strong></span>
+                        {fees === null ? (
+                          <span>Fees: <strong className="text-amber-500 font-bold normal-case">Unknown</strong></span>
+                        ) : fees > 0 ? (
+                          <span>Fees: <strong className="text-slate-700 dark:text-slate-300 font-bold normal-case">{fmt(fees)}</strong></span>
+                        ) : null}
                         {shippingCost > 0 && <span>Shipping Cost: <strong className="text-slate-700 dark:text-slate-300 font-bold normal-case">{fmt(shippingCost)}</strong></span>}
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="text-slate-400">Margin:</span>
-                        <span className={`font-black ${profit >= 0 ? "text-emerald-600" : "text-red-500"}`}>
-                          {fmt(profit)} ({margin.toFixed(1)}%)
-                        </span>
+                        {profit === null ? (
+                          <span className="text-amber-500 font-medium normal-case">
+                            {hasUnknownCost ? "Profit unavailable — acquisition cost missing" : "Profit unavailable — fees unknown"}
+                          </span>
+                        ) : (
+                          <span className={`font-black ${profit >= 0 ? "text-emerald-600" : "text-red-500"}`}>
+                            {fmt(profit)} ({margin !== null ? margin.toFixed(1) : "0.0"}%)
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>

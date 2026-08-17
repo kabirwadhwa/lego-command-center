@@ -97,10 +97,15 @@ export class InventoryService {
 
         if (existingBalance) {
           const oldQty = existingBalance.quantity;
-          const oldAvgCost = Number(existingBalance.averageCost);
+          const oldAvgCost = existingBalance.averageCost !== null ? Number(existingBalance.averageCost) : null;
           newQty = oldQty + item.quantity;
-          // Weighted moving average cost formula:
-          newAvgCost = (oldQty * oldAvgCost + item.quantity * item.unitCost) / newQty;
+          
+          if (oldAvgCost === null) {
+            newAvgCost = item.unitCost;
+          } else {
+            // Weighted moving average cost formula:
+            newAvgCost = (oldQty * oldAvgCost + item.quantity * item.unitCost) / newQty;
+          }
 
           await tx.inventoryBalance.update({
             where: { id: existingBalance.id },
@@ -167,7 +172,7 @@ export class InventoryService {
     items: SaleItemInput[];
     notes?: string;
     grossRevenue: number;
-    marketplaceFees?: number;
+    marketplaceFees?: number | null;
     shippingRevenue?: number;
     shippingCost?: number;
     discount?: number;
@@ -182,7 +187,7 @@ export class InventoryService {
       items,
       notes,
       grossRevenue,
-      marketplaceFees = 0,
+      marketplaceFees = null,
       shippingRevenue = 0,
       shippingCost = 0,
       discount = 0,
@@ -234,7 +239,7 @@ export class InventoryService {
           );
         }
 
-        const costAtSale = Number(existingBalance.averageCost);
+        const costAtSale = existingBalance.averageCost !== null ? Number(existingBalance.averageCost) : null;
         const lineRevenue = item.quantity * item.unitSalePrice;
 
         // Decrement balance
@@ -253,7 +258,7 @@ export class InventoryService {
             inventoryAccountId: item.inventoryAccountId,
             type: InventoryTransactionType.SALE,
             quantity: -item.quantity,
-            unitCost: new Prisma.Decimal(costAtSale),
+            unitCost: costAtSale !== null ? new Prisma.Decimal(costAtSale) : null,
             channel: marketplaceId,
             externalOrderId,
             actorType,
@@ -268,13 +273,15 @@ export class InventoryService {
           inventoryAccountId: item.inventoryAccountId,
           quantity: item.quantity,
           unitSalePrice: new Prisma.Decimal(item.unitSalePrice),
-          unitCostAtSale: new Prisma.Decimal(costAtSale),
+          unitCostAtSale: costAtSale !== null ? new Prisma.Decimal(costAtSale) : null,
           lineRevenue: new Prisma.Decimal(lineRevenue),
         });
       }
 
       // 3. Create the commercial Sale and SaleItem records
-      const netRevenue = grossRevenue - marketplaceFees - shippingCost - discount;
+      const netRevenue = marketplaceFees !== null 
+        ? grossRevenue - marketplaceFees - shippingCost - discount 
+        : null;
       const sale = await tx.sale.create({
         data: {
           marketplaceId,
@@ -282,11 +289,11 @@ export class InventoryService {
           saleDate,
           status: "COMPLETED",
           grossRevenue: new Prisma.Decimal(grossRevenue),
-          marketplaceFees: new Prisma.Decimal(marketplaceFees),
+          marketplaceFees: marketplaceFees !== null ? new Prisma.Decimal(marketplaceFees) : null,
           shippingRevenue: new Prisma.Decimal(shippingRevenue),
           shippingCost: new Prisma.Decimal(shippingCost),
           discount: new Prisma.Decimal(discount),
-          netRevenue: new Prisma.Decimal(netRevenue),
+          netRevenue: netRevenue !== null ? new Prisma.Decimal(netRevenue) : null,
           notes,
           items: {
             create: processedSaleItems,
@@ -356,7 +363,7 @@ export class InventoryService {
         );
       }
 
-      const costBasis = Number(sourceBalance.averageCost);
+      const costBasis = sourceBalance.averageCost !== null ? Number(sourceBalance.averageCost) : null;
 
       // Lock destination balance row FOR UPDATE (if exists)
       const destBalances = await tx.$queryRaw<InventoryBalance[]>`
@@ -378,16 +385,25 @@ export class InventoryService {
 
       if (destBalance) {
         const destOldQty = destBalance.quantity;
-        const destOldAvgCost = Number(destBalance.averageCost);
+        const destOldAvgCost = destBalance.averageCost !== null ? Number(destBalance.averageCost) : null;
         const destNewQty = destOldQty + quantity;
-        // Calculate new weighted cost basis on target account:
-        const destNewAvgCost = (destOldQty * destOldAvgCost + quantity * costBasis) / destNewQty;
+        let destNewAvgCost: number | null = null;
+
+        if (destOldAvgCost === null && costBasis === null) {
+          destNewAvgCost = null;
+        } else if (destOldAvgCost === null && costBasis !== null) {
+          destNewAvgCost = costBasis;
+        } else if (destOldAvgCost !== null && costBasis === null) {
+          destNewAvgCost = destOldAvgCost;
+        } else if (destOldAvgCost !== null && costBasis !== null) {
+          destNewAvgCost = (destOldQty * destOldAvgCost + quantity * costBasis) / destNewQty;
+        }
 
         await tx.inventoryBalance.update({
           where: { id: destBalance.id },
           data: {
             quantity: destNewQty,
-            averageCost: new Prisma.Decimal(destNewAvgCost),
+            averageCost: destNewAvgCost !== null ? new Prisma.Decimal(destNewAvgCost) : null,
             lastUpdated: new Date(),
           },
         });
@@ -397,7 +413,7 @@ export class InventoryService {
             productVariantId,
             inventoryAccountId: destinationAccountId,
             quantity,
-            averageCost: new Prisma.Decimal(costBasis),
+            averageCost: costBasis !== null ? new Prisma.Decimal(costBasis) : null,
           },
         });
       }
@@ -409,7 +425,7 @@ export class InventoryService {
           inventoryAccountId: sourceAccountId,
           type: InventoryTransactionType.TRANSFER,
           quantity: -quantity,
-          unitCost: new Prisma.Decimal(costBasis),
+          unitCost: costBasis !== null ? new Prisma.Decimal(costBasis) : null,
           actorType: ActorType.USER,
           actorId,
           actorName,
@@ -423,7 +439,7 @@ export class InventoryService {
           inventoryAccountId: destinationAccountId,
           type: InventoryTransactionType.TRANSFER,
           quantity,
-          unitCost: new Prisma.Decimal(costBasis),
+          unitCost: costBasis !== null ? new Prisma.Decimal(costBasis) : null,
           linkedTransactionId: tx1.id,
           actorType: ActorType.USER,
           actorId,
@@ -457,7 +473,7 @@ export class InventoryService {
     inventoryAccountId: string;
     type: InventoryTransactionType;
     quantityChange: number;
-    unitCost?: number;
+    unitCost?: number | null;
     notes?: string;
   }) {
     const {
@@ -485,7 +501,7 @@ export class InventoryService {
       `;
 
       const existingBalance = balances[0];
-      const costBasis = unitCost ?? (existingBalance ? Number(existingBalance.averageCost) : 0);
+      const costBasis = unitCost ?? (existingBalance && existingBalance.averageCost !== null ? Number(existingBalance.averageCost) : null);
 
       if (existingBalance) {
         const newQty = existingBalance.quantity + quantityChange;
@@ -494,16 +510,26 @@ export class InventoryService {
         }
 
         // Recalculate average cost only if we are adding stock
-        let newAvgCost = Number(existingBalance.averageCost);
+        let newAvgCost = existingBalance.averageCost !== null ? Number(existingBalance.averageCost) : null;
         if (quantityChange > 0) {
-          newAvgCost = (existingBalance.quantity * newAvgCost + quantityChange * costBasis) / newQty;
+          const oldQty = existingBalance.quantity;
+          const oldAvgCost = newAvgCost;
+          if (oldAvgCost === null && costBasis === null) {
+            newAvgCost = null;
+          } else if (oldAvgCost === null && costBasis !== null) {
+            newAvgCost = costBasis;
+          } else if (oldAvgCost !== null && costBasis === null) {
+            newAvgCost = oldAvgCost;
+          } else if (oldAvgCost !== null && costBasis !== null) {
+            newAvgCost = (oldQty * oldAvgCost + quantityChange * costBasis) / newQty;
+          }
         }
 
         await tx.inventoryBalance.update({
           where: { id: existingBalance.id },
           data: {
             quantity: newQty,
-            averageCost: new Prisma.Decimal(newAvgCost),
+            averageCost: newAvgCost !== null ? new Prisma.Decimal(newAvgCost) : null,
             lastUpdated: new Date(),
           },
         });
@@ -516,7 +542,7 @@ export class InventoryService {
             productVariantId,
             inventoryAccountId,
             quantity: quantityChange,
-            averageCost: new Prisma.Decimal(costBasis),
+            averageCost: costBasis !== null ? new Prisma.Decimal(costBasis) : null,
           },
         });
       }
@@ -528,7 +554,7 @@ export class InventoryService {
           inventoryAccountId,
           type,
           quantity: quantityChange,
-          unitCost: new Prisma.Decimal(costBasis),
+          unitCost: costBasis !== null ? new Prisma.Decimal(costBasis) : null,
           actorType: ActorType.USER,
           actorId,
           actorName,

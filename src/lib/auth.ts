@@ -41,14 +41,32 @@ export function isDemoAuthEnabled(): boolean {
   return process.env.ENABLE_DEMO_AUTH === "true";
 }
 
+export function scryptHash(password: string): string {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const derivedKey = crypto.scryptSync(password, salt, 64, { N: 16384, r: 8, p: 1 }).toString("hex");
+  return `scrypt$16384$8$1$${salt}$${derivedKey}`;
+}
+
 export function verifyDemoPassword(password: string): boolean {
   const hash = process.env.DEMO_PASSWORD_HASH;
-  if (!hash || hash.length !== 64) return false;
+  if (!hash) return false;
+
   try {
-    const computed = crypto.createHash("sha256").update(password).digest("hex");
-    return crypto.timingSafeEqual(Buffer.from(computed, "hex"), Buffer.from(hash, "hex"));
+    const parts = hash.split("$");
+    if (parts.length !== 6) return false;
+    const [algorithm, nStr, rStr, pStr, salt, derivedKeyHex] = parts;
+    if (algorithm !== "scrypt") return false;
+
+    const N = parseInt(nStr, 10);
+    const r = parseInt(rStr, 10);
+    const p = parseInt(pStr, 10);
+
+    const keyBuffer = Buffer.from(derivedKeyHex, "hex");
+    const testKey = crypto.scryptSync(password, salt, keyBuffer.length, { N, r, p });
+
+    return crypto.timingSafeEqual(keyBuffer, testKey);
   } catch {
-    return false;
+    return false; // fail closed
   }
 }
 

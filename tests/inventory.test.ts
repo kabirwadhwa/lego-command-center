@@ -100,13 +100,17 @@ describe("Inventory Ledger Integrity & Concurrency Invariant Tests", () => {
   afterAll(async () => {
     await cleanTestRecords();
     
-    // Clean up variant and product catalog details
-    await prisma.productVariant.deleteMany({
-      where: { id: testVariantId },
-    });
-    await prisma.product.deleteMany({
+    const product = await prisma.product.findUnique({
       where: { setNumber: "99999" },
     });
+    if (product) {
+      await prisma.productVariant.deleteMany({
+        where: { productId: product.id },
+      });
+      await prisma.product.delete({
+        where: { id: product.id },
+      });
+    }
 
     // Close database pools to prevent hanging handles
     await prisma.$disconnect();

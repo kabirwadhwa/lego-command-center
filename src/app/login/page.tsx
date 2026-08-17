@@ -3,6 +3,8 @@ import { getCurrentUser, getAppMode } from "@/lib/auth";
 import { cookies } from "next/headers";
 import { authenticateDemoAccessAction } from "@/app/actions/authActions";
 
+export const dynamic = "force-dynamic";
+
 export default async function LoginPage() {
   const user = await getCurrentUser();
 

@@ -212,6 +212,19 @@ describe("Shopify Webhooks, Idempotency & Inventory Integrity integration tests"
       },
     });
     expect(personalBal?.quantity).toBe(3);
+
+    // Verify marketplaceFees is recorded as 0.00 (not fabricated) and netRevenue is correct
+    const sale = await prisma.sale.findUnique({
+      where: {
+        marketplaceId_externalOrderId: {
+          marketplaceId: MarketplaceType.SHOPIFY,
+          externalOrderId: "order-id-1",
+        },
+      },
+    });
+    expect(sale).not.toBeNull();
+    expect(Number(sale?.marketplaceFees)).toBe(0.00);
+    expect(Number(sale?.netRevenue)).toBe(150.00); // 150.00 gross - 0.00 fees
   });
 
   test("Unknown SKU order creates UNMATCHED_ORDER alert and leaves stock untouched", async () => {

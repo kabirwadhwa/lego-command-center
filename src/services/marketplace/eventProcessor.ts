@@ -89,8 +89,8 @@ export class MarketplaceEventProcessor {
           0
         ) || 0;
         
-        // Approximate Shopify payment processing fee (approx. 3%)
-        const marketplaceFees = grossRevenue * 0.03;
+        // Do not fabricate transaction fees. Default to 0.00.
+        const marketplaceFees = 0.00;
 
         // 3. Process the sale using the core transaction service
         try {

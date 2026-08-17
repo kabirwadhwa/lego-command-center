@@ -175,8 +175,7 @@ export async function commitShopifyImportAction(params: {
           const oldQty = existing.quantity;
           const oldAvgCost = Number(existing.averageCost);
           const newQty = oldQty + item.quantity;
-          // Assuming 40% margin as default acquisition cost on Shopify import if cost is unavailable
-          const unitCost = item.price * 0.6;
+          const unitCost = 0.00;
           const newAvgCost = (oldQty * oldAvgCost + item.quantity * unitCost) / newQty;
 
           await tx.inventoryBalance.update({
@@ -188,7 +187,7 @@ export async function commitShopifyImportAction(params: {
             },
           });
         } else {
-          const unitCost = item.price * 0.6;
+          const unitCost = 0.00;
           await tx.inventoryBalance.create({
             data: {
               productVariantId: variant.id,
@@ -206,7 +205,7 @@ export async function commitShopifyImportAction(params: {
             inventoryAccountId: params.inventoryAccountId,
             type: "IMPORT",
             quantity: item.quantity,
-            unitCost: new Prisma.Decimal(item.price * 0.6),
+            unitCost: null, // Unknown acquisition cost (do not fabricate)
             actorType: "USER",
             actorId: user.id,
             actorName: user.name,

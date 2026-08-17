@@ -369,7 +369,7 @@ model PriceRecommendation {
 model SyncJob {
   id               String          @id @default(uuid())
   marketplace      MarketplaceType
-  operation        String
+  operation        SyncOperation
   productVariantId String?
   productVariant   ProductVariant? @relation(fields: [productVariantId], references: [id], onDelete: Restrict)
   status           SyncStatus      @default(PENDING)
@@ -402,4 +402,11 @@ model AuditLog {
   action     String
   details    String?
   createdAt  DateTime  @default(now())
+}
+
+enum SyncOperation {
+  SYNC_INVENTORY
+  SYNC_PRICE
+  REFRESH_PRICE_OBSERVATIONS
+  RECONCILE
 }

@@ -548,7 +548,7 @@ export async function acceptPriceRecommendationAction(recommendationId: string) 
         await tx.syncJob.create({
           data: {
             marketplace: listing.marketplace,
-            operation: "SYNC_PRICING",
+            operation: "SYNC_PRICE",
             productVariantId: productVariant.id,
             status: SyncStatus.PENDING,
           },

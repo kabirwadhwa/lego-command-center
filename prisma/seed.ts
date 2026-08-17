@@ -439,7 +439,7 @@ interface DemoVariant {
         await prisma.syncJob.create({
           data: {
             marketplace: MarketplaceType.SHOPIFY,
-            operation: "STOCK_SYNC",
+            operation: "SYNC_INVENTORY",
             productVariantId: variant.id,
             status: SyncStatus.FAILED,
             attemptNumber: 3,

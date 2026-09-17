@@ -10,7 +10,7 @@ export default async function PricingPage() {
   const user = await checkRole([UserRole.VIEWER, UserRole.FAMILY_SELLER, UserRole.ADMIN]);
 
   // Load all active price recommendations
-  const recommendations = await prisma.priceRecommendation.findMany({
+  let recommendations = await prisma.priceRecommendation.findMany({
     include: {
       productVariant: {
         include: {
@@ -26,6 +26,29 @@ export default async function PricingPage() {
     },
     orderBy: { updatedAt: "desc" },
   });
+
+  // If no recommendations exist, auto-run an initial sweep across stock items
+  if (recommendations.length === 0) {
+    const { PriceEngineService } = await import("@/services/pricing/priceEngineService");
+    await PriceEngineService.runFullPricingSweep(15);
+    recommendations = await prisma.priceRecommendation.findMany({
+      include: {
+        productVariant: {
+          include: {
+            product: true,
+            listings: true,
+            balances: {
+              where: {
+                inventoryAccount: { type: "COMPANY" },
+              },
+            },
+          },
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+    });
+  }
+
 
   // Map to client format
   const mappedRecommendations = recommendations.map((rec) => {

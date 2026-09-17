@@ -86,8 +86,6 @@ export async function POST(request: Request) {
         setNumber: "10330",
         name: "LEGO Icons Concorde",
         theme: "Icons",
-        pieceCount: 2083,
-        retailPrice: 199.99,
         status: "ACTIVE"
       }
     });
@@ -142,11 +140,10 @@ export async function POST(request: Request) {
         setNumber: "10316",
         name: "LEGO Icons Lord of the Rings: Rivendell",
         theme: "Icons",
-        pieceCount: 6167,
-        retailPrice: 499.99,
         status: "ACTIVE"
       }
     });
+
 
     const variant10316 = await prisma.productVariant.upsert({
       where: { sku: "LGO-10316-NEW_SEALED" },

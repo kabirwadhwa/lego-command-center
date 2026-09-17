@@ -581,3 +581,65 @@ export async function acceptPriceRecommendationAction(recommendationId: string) 
   }
 }
 
+/**
+ * Triggers the Pricing Engine calculation for a specific variant or full inventory sweep.
+ */
+export async function runPricingEngineAction(variantId?: string) {
+  await checkRole([UserRole.ADMIN, UserRole.FAMILY_SELLER]);
+
+  try {
+    const { PriceEngineService } = await import("@/services/pricing/priceEngineService");
+    
+    if (variantId) {
+      const res = await PriceEngineService.evaluateVariant(variantId);
+      revalidatePath("/pricing");
+      revalidatePath("/alerts");
+      return { success: true as const, data: res };
+    }
+
+    const sweep = await PriceEngineService.runFullPricingSweep(40);
+    revalidatePath("/pricing");
+    revalidatePath("/alerts");
+    revalidatePath("/");
+    return { success: true as const, data: sweep };
+  } catch (err) {
+    console.error("Run pricing engine action failed:", err);
+    const errorMsg = err instanceof Error ? err.message : "Pricing engine calculation failed.";
+    return { success: false as const, error: errorMsg };
+  }
+}
+
+/**
+ * Refreshes live market auction observations from Catawiki for a set.
+ */
+export async function refreshMarketPricesAction(setNumber: string) {
+  await checkRole([UserRole.ADMIN, UserRole.FAMILY_SELLER]);
+
+  try {
+    const { CatawikiScraperService } = await import("@/services/scraper/catawikiScraper");
+    const res = await CatawikiScraperService.refreshSetPrices(setNumber);
+
+    if (res.success) {
+      // Re-run pricing evaluation for any variant associated with this set
+      const product = await prisma.product.findUnique({
+        where: { setNumber },
+        include: { variants: true }
+      });
+
+      if (product && product.variants.length > 0) {
+        const { PriceEngineService } = await import("@/services/pricing/priceEngineService");
+        await PriceEngineService.evaluateVariant(product.variants[0].id);
+      }
+    }
+
+    revalidatePath("/pricing");
+    revalidatePath("/alerts");
+    return res;
+  } catch (err) {
+    console.error("Refresh market prices action failed:", err);
+    const errorMsg = err instanceof Error ? err.message : "Failed to refresh market prices.";
+    return { success: false as const, error: errorMsg, count: 0 };
+  }
+}
+
+

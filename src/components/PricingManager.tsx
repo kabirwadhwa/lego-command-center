@@ -1,7 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { acceptPriceRecommendationAction } from "@/app/actions/marketplaceActions";
+import {
+  acceptPriceRecommendationAction,
+  runPricingEngineAction,
+  refreshMarketPricesAction
+} from "@/app/actions/marketplaceActions";
 import Link from "next/link";
 
 interface ListingInfo {
@@ -10,7 +14,7 @@ interface ListingInfo {
   price: number;
 }
 
-interface RecommendationCard {
+export interface RecommendationCard {
   id: string;
   recommendedPrice: number;
   reasoning: string;
@@ -34,6 +38,8 @@ interface PricingManagerProps {
 export default function PricingManager({ initialRecommendations, userRole }: PricingManagerProps) {
   const [recommendations, setRecommendations] = useState<RecommendationCard[]>(initialRecommendations);
   const [actingId, setActingId] = useState<string | null>(null);
+  const [isSweeping, setIsSweeping] = useState(false);
+  const [refreshingSet, setRefreshingSet] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
@@ -45,7 +51,7 @@ export default function PricingManager({ initialRecommendations, userRole }: Pri
     try {
       const res = await acceptPriceRecommendationAction(recId);
       if (res.success) {
-        setSuccessMsg("Recommendation accepted. Listing prices updated and sync jobs queued.");
+        setSuccessMsg("Recommendation accepted. Listing prices updated and channel sync queued.");
         setRecommendations(prev => prev.filter(r => r.id !== recId));
       } else {
         setErrorMsg(res.error || "Failed to accept pricing suggestion.");
@@ -57,12 +63,82 @@ export default function PricingManager({ initialRecommendations, userRole }: Pri
     }
   };
 
+  const handleRunEngine = async () => {
+    setIsSweeping(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    try {
+      const res = await runPricingEngineAction();
+      if (res.success) {
+        const processedCount = res.data && "processed" in res.data ? res.data.processed : 1;
+        setSuccessMsg(`Pricing engine evaluated ${processedCount} sets and updated recommendations.`);
+        window.location.reload();
+      } else {
+        setErrorMsg(res.error || "Failed to run pricing sweep.");
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || "Pricing sweep failed.");
+    } finally {
+      setIsSweeping(false);
+    }
+  };
+
+  const handleRefreshSet = async (setNumber: string) => {
+    setRefreshingSet(setNumber);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    try {
+      const res = await refreshMarketPricesAction(setNumber);
+      if (res.success) {
+        setSuccessMsg(`Refreshed ${res.count} live Catawiki observations for Set ${setNumber}.`);
+        window.location.reload();
+      } else {
+        setErrorMsg(res.error || `Failed to refresh Catawiki data for ${setNumber}.`);
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || "Failed to fetch Catawiki observations.");
+    } finally {
+      setRefreshingSet(null);
+    }
+  };
+
   const fmt = (val: number) => {
     return new Intl.NumberFormat("nl-BE", { style: "currency", currency: "EUR" }).format(val);
   };
 
+  // Helper to parse confidence score from reasoning
+  const extractConfidence = (reasoning: string) => {
+    const match = reasoning.match(/Confidence score:\s*(\d+)%/i);
+    if (match) return parseInt(match[1], 10);
+    return 75; // Default reasonable baseline
+  };
+
   return (
     <div className="space-y-6">
+      {/* Top Action Controls Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-slate-900 border border-slate-800 rounded-xl">
+        <div className="flex items-center gap-3">
+          <span className="text-xl">📊</span>
+          <div>
+            <div className="text-sm font-bold text-white">Active Recommendations: {recommendations.length}</div>
+            <div className="text-xs text-slate-400">Deterministic median algorithms with outlier trimming & margin guards</div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleRunEngine}
+            disabled={isSweeping}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 text-white text-xs font-bold rounded-lg shadow transition-all cursor-pointer"
+          >
+            <span>{isSweeping ? "⏳" : "⚡"}</span>
+            <span>{isSweeping ? "Evaluating Portfolio..." : "Run Pricing Engine Sweep"}</span>
+          </button>
+        </div>
+      </div>
+
       {successMsg && (
         <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg text-xs font-bold">
           {successMsg}
@@ -76,12 +152,19 @@ export default function PricingManager({ initialRecommendations, userRole }: Pri
       )}
 
       {recommendations.length === 0 ? (
-        <div className="bg-slate-800 border border-slate-700 rounded-xl p-8 text-center space-y-2 max-w-lg mx-auto">
-          <span className="text-3xl">✓</span>
-          <h3 className="font-bold text-white text-base">Perfect margins!</h3>
+        <div className="bg-slate-800 border border-slate-700 rounded-xl p-12 text-center space-y-3 max-w-lg mx-auto">
+          <span className="text-4xl">✓</span>
+          <h3 className="font-bold text-white text-lg">Portfolio Margins Optimized!</h3>
           <p className="text-slate-400 text-xs font-medium">
-            There are no active pricing recommendations to review at this time.
+            There are no active pricing recommendations pending review. Click "Run Pricing Engine Sweep" to scan the catalog against the latest Catawiki market observations.
           </p>
+          <button
+            onClick={handleRunEngine}
+            disabled={isSweeping}
+            className="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg"
+          >
+            {isSweeping ? "Running Sweep..." : "Run Pricing Engine Now"}
+          </button>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-6 max-w-4xl">
@@ -89,12 +172,15 @@ export default function PricingManager({ initialRecommendations, userRole }: Pri
             const margin = rec.recommendedPrice > 0
               ? ((rec.recommendedPrice - rec.variant.cost) / rec.recommendedPrice) * 100
               : 0;
+            const netProfit = rec.recommendedPrice > 0 ? rec.recommendedPrice - rec.variant.cost : 0;
             const isActing = actingId === rec.id;
+            const isRefreshing = refreshingSet === rec.variant.setNumber;
+            const confidence = extractConfidence(rec.reasoning);
 
             return (
               <div
                 key={rec.id}
-                className="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden shadow-md flex flex-col"
+                className="bg-slate-800/90 border border-slate-700 rounded-xl overflow-hidden shadow-lg flex flex-col transition-all hover:border-slate-600"
               >
                 {/* Header info */}
                 <div className="p-6 border-b border-slate-750 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -105,6 +191,16 @@ export default function PricingManager({ initialRecommendations, userRole }: Pri
                       </span>
                       <span className="text-slate-400 text-[10px] font-semibold uppercase">
                         {rec.variant.condition.replace("_", " ")}
+                      </span>
+                      {/* Confidence Score Badge */}
+                      <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider border ${
+                        confidence >= 80
+                          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                          : confidence >= 50
+                          ? "bg-blue-500/10 text-blue-400 border-blue-500/30"
+                          : "bg-amber-500/10 text-amber-400 border-amber-500/30"
+                      }`}>
+                        {confidence}% Confidence
                       </span>
                     </div>
                     <Link
@@ -118,8 +214,8 @@ export default function PricingManager({ initialRecommendations, userRole }: Pri
                     </div>
                   </div>
 
-                  {/* Pricing Comparison */}
-                  <div className="flex gap-6 shrink-0 bg-slate-900/50 border border-slate-750 px-4 py-3 rounded-lg text-center">
+                  {/* Pricing Comparison Stats */}
+                  <div className="flex gap-6 shrink-0 bg-slate-900/70 border border-slate-750 px-4 py-3 rounded-lg text-center">
                     <div>
                       <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">
                         Avg Cost
@@ -145,55 +241,65 @@ export default function PricingManager({ initialRecommendations, userRole }: Pri
                       <span className={`text-xs font-black block mt-0.5 ${
                         margin > 30 ? "text-emerald-400" : margin > 15 ? "text-amber-400" : "text-rose-400"
                       }`}>
-                        {margin.toFixed(1)}%
+                        {margin.toFixed(1)}% (+{fmt(netProfit)})
                       </span>
                     </div>
                   </div>
                 </div>
 
-                {/* Reasoning Details */}
-                <div className="p-6 bg-slate-900/40 space-y-4">
-                  <div className="space-y-1">
-                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">
-                      Market Intelligence Reasoning
-                    </span>
-                    <p className="text-xs text-slate-300 font-medium leading-relaxed">
-                      {rec.reasoning}
-                    </p>
+                {/* Reasoning Box & Market Evidence */}
+                <div className="p-6 bg-slate-850/50 flex flex-col gap-4">
+                  <div className="text-xs font-medium text-slate-300 leading-relaxed bg-slate-900/60 p-3 rounded-lg border border-slate-750">
+                    <span className="font-bold text-blue-400 mr-1">Algorithm Rationale:</span>
+                    {rec.reasoning}
                   </div>
 
-                  {/* Existing Listings Prices */}
-                  {rec.variant.listings.length > 0 && (
-                    <div className="space-y-1.5 pt-1">
-                      <span className="text-[9px] font-bold text-slate-450 uppercase tracking-wider block">
-                        Current Connected Listing Prices:
-                      </span>
-                      <div className="flex flex-wrap gap-2">
-                        {rec.variant.listings.map(l => (
-                          <div
-                            key={l.id}
-                            className="bg-slate-800 border border-slate-700 rounded px-2.5 py-1 text-[10px] font-semibold text-slate-200"
-                          >
-                            <span className="text-slate-400 uppercase mr-1">{l.marketplace}:</span>
-                            {fmt(l.price)}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                  {/* Current Active Listings */}
+                  <div className="flex items-center gap-2 text-xs text-slate-400">
+                    <span className="font-bold text-slate-300">Active Channel Listings:</span>
+                    {rec.variant.listings.length === 0 ? (
+                      <span className="italic">No channel listings currently active</span>
+                    ) : (
+                      rec.variant.listings.map((l) => (
+                        <span
+                          key={l.id}
+                          className="px-2 py-0.5 bg-slate-800 border border-slate-700 rounded text-[10px] font-mono text-slate-200"
+                        >
+                          {l.marketplace}: {fmt(l.price)}
+                        </span>
+                      ))
+                    )}
+                  </div>
+                </div>
 
-                  {/* Accept action */}
-                  {userRole !== "VIEWER" && (
-                    <div className="flex justify-end pt-2 border-t border-slate-750/30">
-                      <button
-                        onClick={() => handleAccept(rec.id)}
-                        disabled={isActing}
-                        className="py-1.5 px-4 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-bold text-xs rounded-lg transition-colors shadow-md shadow-blue-500/10"
-                      >
-                        {isActing ? "Syncing..." : "Accept and Sync Price"}
-                      </button>
-                    </div>
-                  )}
+                {/* Bottom Actions */}
+                <div className="p-4 bg-slate-900 border-t border-slate-750 flex items-center justify-between gap-3">
+                  <button
+                    onClick={() => handleRefreshSet(rec.variant.setNumber)}
+                    disabled={isRefreshing}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-750 disabled:bg-slate-850 text-slate-300 text-xs font-semibold rounded-lg border border-slate-700 transition-colors cursor-pointer"
+                  >
+                    <span>{isRefreshing ? "⏳" : "🔄"}</span>
+                    <span>{isRefreshing ? "Refreshing Catawiki..." : "Refresh Catawiki Bids"}</span>
+                  </button>
+
+                  <div className="flex items-center gap-3">
+                    <Link
+                      href={`/inventory/${rec.variant.id}`}
+                      className="px-3 py-1.5 text-xs text-slate-400 hover:text-white transition-colors"
+                    >
+                      Inspect Variant
+                    </Link>
+
+                    <button
+                      onClick={() => handleAccept(rec.id)}
+                      disabled={isActing}
+                      className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-800 text-white text-xs font-bold rounded-lg shadow transition-all cursor-pointer flex items-center gap-1.5"
+                    >
+                      <span>{isActing ? "⏳" : "✓"}</span>
+                      <span>{isActing ? "Applying..." : "Accept & Sync Price"}</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             );

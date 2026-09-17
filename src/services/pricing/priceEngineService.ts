@@ -1,6 +1,70 @@
 import prisma from "@/lib/prisma";
-import { AlertSeverity, AlertType, PriceType } from "@prisma/client";
+import { AlertSeverity, AlertType, ObservationProvenance, PriceType } from "@prisma/client";
 import { CatawikiScraperService } from "../scraper/catawikiScraper";
+import { getAppMode } from "@/lib/auth";
+
+export type ConfidenceTier = "INSUFFICIENT" | "LOW" | "MEDIUM" | "HIGH";
+
+export interface MarketplaceFeeStructure {
+  channel: string;
+  variableFeePct: number; // e.g. 0.15 for 15%
+  fixedFee: number;       // e.g. 0.30 EUR
+  estimatedShipping: number; // e.g. 6.50 EUR
+}
+
+export const MARKETPLACE_FEES: Record<string, MarketplaceFeeStructure> = {
+  SHOPIFY: {
+    channel: "SHOPIFY",
+    variableFeePct: 0.029, // 2.9% transaction & payment processing
+    fixedFee: 0.30,
+    estimatedShipping: 0.00, // typically paid by customer
+  },
+  BOL: {
+    channel: "BOL",
+    variableFeePct: 0.15, // 15% category commission
+    fixedFee: 0.00,
+    estimatedShipping: 6.50,
+  },
+  CATAWIKI: {
+    channel: "CATAWIKI",
+    variableFeePct: 0.125, // 12.5% seller commission
+    fixedFee: 0.00,
+    estimatedShipping: 0.00, // paid by buyer
+  },
+  EBAY: {
+    channel: "EBAY",
+    variableFeePct: 0.1325, // 13.25% final value fee
+    fixedFee: 0.35,
+    estimatedShipping: 6.50,
+  },
+  BRICKLINK: {
+    channel: "BRICKLINK",
+    variableFeePct: 0.059, // 3% sales commission + 2.9% payment processing
+    fixedFee: 0.30,
+    estimatedShipping: 0.00,
+  },
+  DEFAULT: {
+    channel: "DEFAULT",
+    variableFeePct: 0.15, // 15% blended platform fee
+    fixedFee: 0.30,
+    estimatedShipping: 0.00,
+  },
+};
+
+/**
+ * Calculates deterministic breakeven floor:
+ * breakevenFloor = (cost + paymentFixedFee + shipping) / (1 - fees)
+ */
+export function calculateBreakevenFloor(
+  cost: number | null,
+  feeStructure: MarketplaceFeeStructure = MARKETPLACE_FEES.DEFAULT
+): number | null {
+  if (cost === null || cost <= 0) return null;
+  const netRequired = cost + feeStructure.fixedFee + feeStructure.estimatedShipping;
+  const divisor = 1 - feeStructure.variableFeePct;
+  if (divisor <= 0) return null;
+  return Math.round((netRequired / divisor) * 100) / 100;
+}
 
 export interface PricingMetrics {
   sampleSize: number;
@@ -10,7 +74,10 @@ export interface PricingMetrics {
   min: number;
   max: number;
   stdDev: number;
+  cv: number;
   confidenceScore: number; // 0 - 100
+  confidenceTier: ConfidenceTier;
+  datePenalized: boolean;
 }
 
 export interface RecommendationResult {
@@ -18,19 +85,35 @@ export interface RecommendationResult {
   sku: string;
   setNumber: string;
   productName: string;
-  cost: number;
+  cost: number | null;
+  costBasisStatus: "FULLY_KNOWN" | "PARTIALLY_KNOWN" | "COMPLETELY_UNKNOWN";
   recommendedPrice: number;
   projectedMarginPct: number;
   confidenceScore: number;
+  confidenceTier: ConfidenceTier;
   reasoning: string;
+  breakevenFloor?: number | null;
+  channel: string;
   alertCreated?: string;
+  status: "OPTIMAL" | "INSUFFICIENT_DATA" | "BELOW_FLOOR" | "HIGH_MARGIN";
+}
+
+export interface EvaluateVariantOptions {
+  channel?: string;
+  allowSimulated?: boolean;
 }
 
 export class PriceEngineService {
   /**
    * Statistical outlier trimming and summary metrics calculation.
+   * Confidence score (0-100) penalizes missing/unparseable dates, evaluates sample size,
+   * CV spread, and completed vs active bid signals.
    */
-  static calculateMetrics(prices: number[], capturedDates: Date[] = []): PricingMetrics {
+  static calculateMetrics(
+    prices: number[],
+    capturedDates: (Date | null | undefined | string)[] = [],
+    priceTypes: (PriceType | string)[] = []
+  ): PricingMetrics {
     if (!prices || prices.length === 0) {
       return {
         sampleSize: 0,
@@ -40,11 +123,32 @@ export class PriceEngineService {
         min: 0,
         max: 0,
         stdDev: 0,
-        confidenceScore: 0
+        cv: 1.0,
+        confidenceScore: 0,
+        confidenceTier: "INSUFFICIENT",
+        datePenalized: false,
       };
     }
 
     const rawCount = prices.length;
+    if (rawCount < 2) {
+      // Rule: Fewer than 2 observations is strictly INSUFFICIENT evidence
+      const singlePrice = prices[0];
+      return {
+        sampleSize: 1,
+        rawCount: 1,
+        median: singlePrice,
+        mean: singlePrice,
+        min: singlePrice,
+        max: singlePrice,
+        stdDev: 0,
+        cv: 0,
+        confidenceScore: 0,
+        confidenceTier: "INSUFFICIENT",
+        datePenalized: false,
+      };
+    }
+
     const sorted = [...prices].sort((a, b) => a - b);
 
     // Outlier trimming: if sample size >= 4, trim highest and lowest value
@@ -66,34 +170,94 @@ export class PriceEngineService {
     const min = filtered[0];
     const max = filtered[count - 1];
 
-    // Standard deviation
+    // Standard deviation & coefficient of variation
     const variance = filtered.reduce((acc, p) => acc + Math.pow(p - mean, 2), 0) / count;
     const stdDev = Math.round(Math.sqrt(variance) * 100) / 100;
     const cv = mean > 0 ? stdDev / mean : 1.0;
 
-    // Confidence scoring (0 - 100)
-    let confidence = 0;
-    // 1. Sample size component (up to 50 pts)
-    if (rawCount >= 8) confidence += 50;
-    else if (rawCount >= 5) confidence += 40;
-    else if (rawCount >= 3) confidence += 25;
-    else confidence += 10;
+    // --- Confidence scoring (0 - 100) ---
+    // 1. Sample size component (up to 35 pts)
+    let samplePts = 0;
+    if (rawCount >= 8) samplePts = 35;
+    else if (rawCount >= 5) samplePts = 28;
+    else if (rawCount >= 3) samplePts = 20;
+    else if (rawCount === 2) samplePts = 10;
 
-    // 2. Recency component (up to 30 pts)
+    // 2. Recency & Date validity component (up to 25 pts)
+    let recencyPts = 0;
+    let datePenalized = false;
     const now = Date.now();
-    const newestDate = capturedDates.length > 0
-      ? Math.max(...capturedDates.map(d => d.getTime()))
-      : now;
-    const ageDays = (now - newestDate) / (1000 * 60 * 60 * 24);
-    if (ageDays < 7) confidence += 30;
-    else if (ageDays < 15) confidence += 20;
-    else if (ageDays < 30) confidence += 10;
-    else confidence += 5;
+    let hasMissingOrInvalidDate = false;
 
-    // 3. Volatility / tight spread component (up to 20 pts)
-    if (cv < 0.10) confidence += 20;
-    else if (cv < 0.20) confidence += 10;
-    else confidence += 5;
+    if (capturedDates.length === 0 || capturedDates.length < rawCount) {
+      hasMissingOrInvalidDate = true;
+    }
+
+    const validTimestamps: number[] = [];
+    for (const d of capturedDates) {
+      if (!d) {
+        hasMissingOrInvalidDate = true;
+        continue;
+      }
+      const t = d instanceof Date ? d.getTime() : new Date(d).getTime();
+      if (isNaN(t) || t <= 0) {
+        hasMissingOrInvalidDate = true;
+      } else {
+        validTimestamps.push(t);
+      }
+    }
+
+    if (hasMissingOrInvalidDate) {
+      // Missing or unparseable dates are penalized: -10 pts, 0 recency
+      datePenalized = true;
+      recencyPts = 0;
+    } else if (validTimestamps.length > 0) {
+      const newestDate = Math.max(...validTimestamps);
+      const ageDays = (now - newestDate) / (1000 * 60 * 60 * 24);
+      if (ageDays < 7) recencyPts = 25;
+      else if (ageDays < 15) recencyPts = 18;
+      else if (ageDays < 30) recencyPts = 10;
+      else if (ageDays < 45) recencyPts = 5;
+      else recencyPts = 0;
+    }
+
+    // 3. Volatility / tight spread component (up to 25 pts)
+    let spreadPts = 0;
+    if (cv < 0.08) spreadPts = 25;
+    else if (cv < 0.15) spreadPts = 18;
+    else if (cv < 0.25) spreadPts = 10;
+    else spreadPts = 0;
+
+    // 4. Completed vs Active bids component (up to 15 pts)
+    let transactionPts = 5; // baseline for active bids / asking prices
+    if (priceTypes && priceTypes.length > 0) {
+      const soldCount = priceTypes.filter(
+        pt => pt === PriceType.SOLD_PRICE || pt === "SOLD_PRICE"
+      ).length;
+      if (soldCount / priceTypes.length >= 0.5) {
+        transactionPts = 15;
+      } else if (soldCount > 0) {
+        transactionPts = 10;
+      }
+    }
+
+    let totalScore = samplePts + recencyPts + spreadPts + transactionPts;
+    if (datePenalized) {
+      totalScore -= 10;
+    }
+    const confidenceScore = Math.max(0, Math.min(100, Math.round(totalScore)));
+
+    // Map to confidence tiers
+    let confidenceTier: ConfidenceTier = "INSUFFICIENT";
+    if (rawCount < 2 || confidenceScore < 35) {
+      confidenceTier = "INSUFFICIENT";
+    } else if (confidenceScore < 60) {
+      confidenceTier = "LOW";
+    } else if (confidenceScore < 80) {
+      confidenceTier = "MEDIUM";
+    } else {
+      confidenceTier = "HIGH";
+    }
 
     return {
       sampleSize: count,
@@ -103,14 +267,22 @@ export class PriceEngineService {
       min,
       max,
       stdDev,
-      confidenceScore: Math.min(100, confidence)
+      cv: Math.round(cv * 100) / 100,
+      confidenceScore,
+      confidenceTier,
+      datePenalized,
     };
   }
 
   /**
    * Generates a price recommendation for a single product variant.
+   * Only genuine market observations (LIVE_API, LIVE_SCRAPE, MANUAL, IMPORTED) are queried by default.
+   * Handles unknown cost basis truthfully without fabricating 0.00 COGS.
    */
-  static async evaluateVariant(variantId: string): Promise<RecommendationResult | null> {
+  static async evaluateVariant(
+    variantId: string,
+    options?: EvaluateVariantOptions
+  ): Promise<RecommendationResult | null> {
     const variant = await prisma.productVariant.findUnique({
       where: { id: variantId },
       include: {
@@ -127,132 +299,221 @@ export class PriceEngineService {
     const setNumber = variant.product.setNumber;
     const productName = variant.product.name;
     const companyBalance = variant.balances[0];
-    const cost = companyBalance?.averageCost ? Number(companyBalance.averageCost) : 0;
+
+    // Truthful cost basis determination:
+    // If no known units exist, cost is null (never invent 0.00)
+    const knownCostQty = companyBalance?.knownCostQuantity ?? 0;
+    const totalQty = companyBalance?.quantity ?? 0;
+    const cost: number | null = (knownCostQty > 0 && companyBalance?.averageCost)
+      ? Number(companyBalance.averageCost)
+      : null;
+
+    let costBasisStatus: "FULLY_KNOWN" | "PARTIALLY_KNOWN" | "COMPLETELY_UNKNOWN" = "COMPLETELY_UNKNOWN";
+    if (knownCostQty >= totalQty && totalQty > 0 && cost !== null) {
+      costBasisStatus = "FULLY_KNOWN";
+    } else if (knownCostQty > 0 && totalQty > 0) {
+      costBasisStatus = "PARTIALLY_KNOWN";
+    }
+
+    const channel = options?.channel || "DEFAULT";
+    const feeStructure = MARKETPLACE_FEES[channel] || MARKETPLACE_FEES.DEFAULT;
 
     // 1. Query recent observations (last 45 days)
+    // Production rule: exclude SIMULATED observations
+    const allowedProvenances: ObservationProvenance[] = [
+      ObservationProvenance.LIVE_API,
+      ObservationProvenance.LIVE_SCRAPE,
+      ObservationProvenance.MANUAL,
+      ObservationProvenance.IMPORTED,
+    ];
+
+    if (options?.allowSimulated && getAppMode() === "demo") {
+      allowedProvenances.push(ObservationProvenance.SIMULATED);
+    }
+
     const fortyFiveDaysAgo = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000);
     let snapshots = await prisma.marketPriceSnapshot.findMany({
       where: {
         productId: variant.productId,
-        capturedAt: { gte: fortyFiveDaysAgo }
+        capturedAt: { gte: fortyFiveDaysAgo },
+        provenance: { in: allowedProvenances },
       },
       orderBy: { capturedAt: "desc" }
     });
 
-    // If no recent observations, run scraper to collect fresh data
-    if (snapshots.length === 0) {
+    // If fewer than 2 genuine observations, trigger fresh scrape
+    if (snapshots.length < 2) {
       await CatawikiScraperService.refreshSetPrices(setNumber);
       snapshots = await prisma.marketPriceSnapshot.findMany({
         where: {
           productId: variant.productId,
-          capturedAt: { gte: fortyFiveDaysAgo }
+          capturedAt: { gte: fortyFiveDaysAgo },
+          provenance: { in: allowedProvenances },
         },
         orderBy: { capturedAt: "desc" }
       });
     }
 
+    // If STILL fewer than 2 observations, return insufficient evidence state
+    if (snapshots.length < 2) {
+      const existingAlert = await prisma.alert.findFirst({
+        where: {
+          productVariantId: variant.id,
+          type: AlertType.INSUFFICIENT_MARKET_EVIDENCE,
+          resolved: false
+        }
+      });
+      if (!existingAlert) {
+        await prisma.alert.create({
+          data: {
+            productVariantId: variant.id,
+            type: AlertType.INSUFFICIENT_MARKET_EVIDENCE,
+            severity: AlertSeverity.WARNING,
+            message: `Insufficient genuine market observations for Set ${setNumber} (${productName}). Found ${snapshots.length} observation(s); minimum 2 required for reliable pricing.`
+          }
+        });
+      }
+
+      return {
+        variantId: variant.id,
+        sku: variant.sku,
+        setNumber,
+        productName,
+        cost,
+        costBasisStatus,
+        recommendedPrice: 0,
+        projectedMarginPct: 0,
+        confidenceScore: 0,
+        confidenceTier: "INSUFFICIENT",
+        reasoning: `Insufficient genuine market evidence: only ${snapshots.length} observation(s) available in the last 45 days. Minimum 2 required.`,
+        breakevenFloor: null,
+        channel,
+        alertCreated: "INSUFFICIENT_MARKET_EVIDENCE",
+        status: "INSUFFICIENT_DATA"
+      };
+    }
+
     const prices = snapshots.map(s => Number(s.price));
     const dates = snapshots.map(s => s.capturedAt);
-    const metrics = this.calculateMetrics(prices, dates);
+    const types = snapshots.map(s => s.priceType);
+    const metrics = this.calculateMetrics(prices, dates, types);
 
     if (metrics.median === 0) {
       return null;
     }
 
     // 2. Financial and Strategy Rules
-    // Assume 15% combined platform and payment processing fee
-    const platformFeeRate = 0.15;
-    const breakevenFloor = cost > 0 ? Math.round((cost / (1 - platformFeeRate)) * 100) / 100 : 0;
+    const breakevenFloor = calculateBreakevenFloor(cost, feeStructure);
 
     let recommendedPrice: number;
     let strategyNote: string;
     let alertCreated: string | undefined = undefined;
+    let status: "OPTIMAL" | "INSUFFICIENT_DATA" | "BELOW_FLOOR" | "HIGH_MARGIN" = "OPTIMAL";
 
-    const medianNet = metrics.median * (1 - platformFeeRate);
-    const projectedMargin = cost > 0 ? ((metrics.median - cost) / metrics.median) * 100 : 35.0;
+    if (cost !== null && cost > 0 && breakevenFloor !== null) {
+      const netAtMedian = metrics.median * (1 - feeStructure.variableFeePct) - feeStructure.fixedFee - feeStructure.estimatedShipping;
+      const minAcceptableNet = cost * 1.10; // Target minimum 10% net profit over cost
 
-    if (cost > 0 && medianNet < cost * 1.10) {
-      // Unprofitable or razor-thin margin: enforce minimum 15% net margin floor
-      recommendedPrice = Math.round((cost * 1.18) * 100) / 100;
-      strategyNote = `Market median (€${metrics.median.toFixed(2)}) yields unacceptable margin below cost basis. Imposed minimum floor price at €${recommendedPrice.toFixed(2)}.`;
+      if (netAtMedian < minAcceptableNet) {
+        // Enforce breakeven floor + 10% buffer so we never sell at a loss
+        recommendedPrice = Math.round(Math.max(breakevenFloor * 1.05, cost * 1.15) * 100) / 100;
+        strategyNote = `Market median (€${metrics.median.toFixed(2)}) yields unacceptable margin below cost basis (€${cost.toFixed(2)}). Breakeven floor with fees is €${breakevenFloor.toFixed(2)}. Imposed protective minimum floor at €${recommendedPrice.toFixed(2)}.`;
+        status = "BELOW_FLOOR";
 
-      // Trigger UNPROFITABLE_PRICE alert
-      const existingAlert = await prisma.alert.findFirst({
-        where: {
-          productVariantId: variant.id,
-          type: AlertType.UNPROFITABLE_PRICE,
-          resolved: false
-        }
-      });
-      if (!existingAlert) {
-        await prisma.alert.create({
-          data: {
+        // Trigger UNPROFITABLE_PRICE alert
+        const existingAlert = await prisma.alert.findFirst({
+          where: {
             productVariantId: variant.id,
             type: AlertType.UNPROFITABLE_PRICE,
-            severity: AlertSeverity.WARNING,
-            message: `Market prices for ${setNumber} (${productName}) are near or below cost basis (€${cost.toFixed(2)}).`
+            resolved: false
           }
         });
-        alertCreated = "UNPROFITABLE_PRICE";
-      }
-    } else if (projectedMargin > 40.0) {
-      // High margin opportunity: price competitively at 98% of median for rapid turnover
-      recommendedPrice = Math.round((metrics.median * 0.98) * 100) / 100;
-      strategyNote = `Exceptional margin opportunity (${projectedMargin.toFixed(1)}%). Positioned at 98% of median (€${metrics.median.toFixed(2)}) for maximum sales velocity.`;
-
-      // Trigger PRICE_OPPORTUNITY alert
-      const existingAlert = await prisma.alert.findFirst({
-        where: {
-          productVariantId: variant.id,
-          type: AlertType.PRICE_OPPORTUNITY,
-          resolved: false
+        if (!existingAlert) {
+          await prisma.alert.create({
+            data: {
+              productVariantId: variant.id,
+              type: AlertType.UNPROFITABLE_PRICE,
+              severity: AlertSeverity.WARNING,
+              message: `Market prices for ${setNumber} (${productName}) are near or below cost basis (€${cost.toFixed(2)}). Channel breakeven floor is €${breakevenFloor.toFixed(2)}.`
+            }
+          });
+          alertCreated = "UNPROFITABLE_PRICE";
         }
-      });
-      if (!existingAlert) {
-        await prisma.alert.create({
-          data: {
-            productVariantId: variant.id,
-            type: AlertType.PRICE_OPPORTUNITY,
-            severity: AlertSeverity.INFO,
-            message: `High margin opportunity on ${setNumber} (${projectedMargin.toFixed(1)}% margin at market median €${metrics.median.toFixed(2)}).`
+      } else {
+        const projectedMargin = ((metrics.median - cost) / metrics.median) * 100;
+
+        if (projectedMargin > 40.0) {
+          // High margin opportunity: price at 98% of median for velocity
+          const tentativePrice = Math.round((metrics.median * 0.98) * 100) / 100;
+          recommendedPrice = Math.max(breakevenFloor, tentativePrice);
+          strategyNote = `High margin opportunity (${projectedMargin.toFixed(1)}%). Positioned at 98% of median (€${metrics.median.toFixed(2)}) for rapid inventory turnover.`;
+          status = "HIGH_MARGIN";
+
+          // Trigger PRICE_OPPORTUNITY alert
+          const existingAlert = await prisma.alert.findFirst({
+            where: {
+              productVariantId: variant.id,
+              type: AlertType.PRICE_OPPORTUNITY,
+              resolved: false
+            }
+          });
+          if (!existingAlert) {
+            await prisma.alert.create({
+              data: {
+                productVariantId: variant.id,
+                type: AlertType.PRICE_OPPORTUNITY,
+                severity: AlertSeverity.INFO,
+                message: `High margin opportunity on ${setNumber} (${projectedMargin.toFixed(1)}% margin at market median €${metrics.median.toFixed(2)}).`
+              }
+            });
+            alertCreated = "PRICE_OPPORTUNITY";
           }
-        });
-        alertCreated = "PRICE_OPPORTUNITY";
+        } else {
+          // Balanced competitive positioning: 99% of median
+          const tentativePrice = Math.round((metrics.median * 0.99) * 100) / 100;
+          recommendedPrice = Math.max(breakevenFloor, tentativePrice);
+          strategyNote = `Competitive positioning aligned with market median (€${metrics.median.toFixed(2)}) yielding ${projectedMargin.toFixed(1)}% gross margin.`;
+          status = "OPTIMAL";
+        }
       }
     } else {
-      // Balanced competitive positioning
+      // Cost is unknown: Price competitively against market median
       recommendedPrice = Math.round((metrics.median * 0.99) * 100) / 100;
-      strategyNote = `Competitive positioning aligned with market median (€${metrics.median.toFixed(2)}) yielding stable ${projectedMargin.toFixed(1)}% gross margin.`;
+      strategyNote = `Cost basis unknown (inventory acquired without documented unit cost). Positioned competitively at 99% of market median (€${metrics.median.toFixed(2)}).`;
+      status = "OPTIMAL";
     }
 
-    const finalMarginPct = recommendedPrice > 0 && cost > 0
+    const finalMarginPct = (cost !== null && cost > 0 && recommendedPrice > 0)
       ? Math.round(((recommendedPrice - cost) / recommendedPrice) * 1000) / 10
-      : 30.0;
+      : 0;
 
-    const reasoning = `Based on ${metrics.sampleSize} recent Catawiki auction observations (Median: €${metrics.median.toFixed(2)}, Spread: €${metrics.min.toFixed(2)} - €${metrics.max.toFixed(2)}, StdDev: ±€${metrics.stdDev.toFixed(2)}). ${cost > 0 ? `Cost basis: €${cost.toFixed(2)}. ` : ""}${strategyNote} Confidence score: ${metrics.confidenceScore}%.`;
+    const costStr = cost !== null ? `Cost basis: €${cost.toFixed(2)}. ` : "Cost basis: Unknown. ";
+    const reasoning = `Based on ${metrics.sampleSize} genuine market observations (Median: €${metrics.median.toFixed(2)}, Spread: €${metrics.min.toFixed(2)} - €${metrics.max.toFixed(2)}, StdDev: ±€${metrics.stdDev.toFixed(2)}). ${costStr}${strategyNote} Confidence: ${metrics.confidenceScore}% (${metrics.confidenceTier}).`;
 
-    // 3. Persist recommendation
-    const existingRec = await prisma.priceRecommendation.findFirst({
-      where: { productVariantId: variant.id }
-    });
-
-    if (existingRec) {
-      await prisma.priceRecommendation.update({
-        where: { id: existingRec.id },
-        data: {
-          recommendedPrice,
-          reasoning,
-          updatedAt: new Date()
-        }
+    // 3. Persist recommendation in DB (only for positive recommendations)
+    if (recommendedPrice > 0) {
+      const existingRec = await prisma.priceRecommendation.findFirst({
+        where: { productVariantId: variant.id }
       });
-    } else {
-      await prisma.priceRecommendation.create({
-        data: {
-          productVariantId: variant.id,
-          recommendedPrice,
-          reasoning
-        }
-      });
+
+      if (existingRec) {
+        await prisma.priceRecommendation.update({
+          where: { id: existingRec.id },
+          data: {
+            recommendedPrice,
+            reasoning,
+            updatedAt: new Date()
+          }
+        });
+      } else {
+        await prisma.priceRecommendation.create({
+          data: {
+            productVariantId: variant.id,
+            recommendedPrice,
+            reasoning
+          }
+        });
+      }
     }
 
     return {
@@ -261,18 +522,26 @@ export class PriceEngineService {
       setNumber,
       productName,
       cost,
+      costBasisStatus,
       recommendedPrice,
       projectedMarginPct: finalMarginPct,
       confidenceScore: metrics.confidenceScore,
+      confidenceTier: metrics.confidenceTier,
       reasoning,
-      alertCreated
+      breakevenFloor,
+      channel,
+      alertCreated,
+      status
     };
   }
 
   /**
-   * Evaluates all active variants with stock and generates fresh price recommendations.
+   * Evaluates active variants with company stock and generates fresh price recommendations.
    */
-  static async runFullPricingSweep(limit: number = 30): Promise<{
+  static async runFullPricingSweep(
+    limit: number = 30,
+    options?: EvaluateVariantOptions
+  ): Promise<{
     processed: number;
     recommendationsCreated: number;
     alertsGenerated: number;
@@ -280,7 +549,6 @@ export class PriceEngineService {
   }> {
     console.log(`[PriceEngine] Initiating pricing sweep for up to ${limit} inventory items...`);
 
-    // Prioritize variants that have Company inventory balance > 0
     const variants = await prisma.productVariant.findMany({
       where: {
         balances: {
@@ -300,9 +568,11 @@ export class PriceEngineService {
 
     for (const v of variants) {
       try {
-        const res = await this.evaluateVariant(v.id);
+        const res = await this.evaluateVariant(v.id, options);
         if (res) {
-          recCount++;
+          if (res.recommendedPrice > 0) {
+            recCount++;
+          }
           if (res.alertCreated) alertCount++;
           results.push(res);
         }

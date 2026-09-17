@@ -23,8 +23,8 @@ export interface AuthUser {
 }
 
 /**
- * Helper to determine if we are in DEMO mode.
- * Falls back to true if NEXT_PUBLIC_INTEGRATION_MODE is not set or set to "DEMO".
+ * Helper to determine current application environment mode.
+ * Defaults to "production" if unconfigured or invalid.
  */
 export function getAppMode(): "development" | "demo" | "production" {
   const mode = process.env.APP_MODE;
@@ -34,6 +34,9 @@ export function getAppMode(): "development" | "demo" | "production" {
   return "production";
 }
 
+/**
+ * Returns true only if demo authentication is explicitly enabled in a non-production mode.
+ */
 export function isDemoAuthEnabled(): boolean {
   if (getAppMode() === "production") {
     return false;
@@ -75,21 +78,22 @@ export function isDemoMode(): boolean {
 }
 
 /**
- * Gets the current authenticated session user from Supabase or simulated session cookies.
- * Does not check database roles directly, returns basic identification.
+ * Gets the current authenticated session user.
+ * Strictly fails closed: returns null if unauthenticated, invalid, or missing.
+ * Zero production auto-login or bypass behavior.
  */
 export async function getSessionUser(): Promise<{ id: string; email: string } | null> {
-  // If running Jest unit tests, do NOT bypass auth checks so the tests pass
-  if (process.env.NODE_ENV === "test") {
-    const appMode = getAppMode();
+  const appMode = getAppMode();
 
-    if (appMode === "production") {
+  // 1. Production Mode: Strictly use Supabase Auth
+  if (appMode === "production") {
+    try {
       const cookieStore = await cookies();
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
       const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
       if (!supabaseUrl || !supabaseAnonKey) {
-        return null;
+        return null; // Fail closed if auth credentials are missing
       }
 
       const supabase = createServerClient(
@@ -111,16 +115,25 @@ export async function getSessionUser(): Promise<{ id: string; email: string } | 
 
       const { data: { user }, error } = await supabase.auth.getUser();
       if (error || !user) {
-        return null;
+        return null; // Fail closed on auth error or missing session
       }
 
       return {
         id: user.id,
         email: user.email ?? ""
       };
+    } catch {
+      return null; // Fail closed
+    }
+  }
+
+  // 2. Demo Mode: Only permitted when APP_MODE="demo" AND ENABLE_DEMO_AUTH="true"
+  if (appMode === "demo") {
+    if (!isDemoAuthEnabled()) {
+      return null;
     }
 
-    if (appMode === "demo") {
+    try {
       const cookieStore = await cookies();
       const hasDemoAccess = cookieStore.get("demo_access_token")?.value === "true";
       if (!hasDemoAccess) {
@@ -137,24 +150,26 @@ export async function getSessionUser(): Promise<{ id: string; email: string } | 
       });
 
       if (!user || user.status !== "ACTIVE") {
-        return null;
+        return null; // Fail closed
       }
 
       return {
         id: user.id,
         email: user.email
       };
+    } catch {
+      return null; // Fail closed
     }
+  }
 
-    if (appMode === "development") {
+  // 3. Development Mode: Requires explicit demo cookie pointing to a valid active user in DB
+  if (appMode === "development") {
+    try {
       const cookieStore = await cookies();
       const activeUserId = cookieStore.get("lego_demo_user_id")?.value;
 
       if (!activeUserId) {
-        return {
-          id: "44444444-4444-4444-4444-444444444444", // Kristof's fixed seed UUID
-          email: "kristof@vervliet.be",
-        };
+        return null; // Fail closed: unauthenticated user must sign in
       }
 
       const user = await prisma.user.findUnique({
@@ -162,31 +177,34 @@ export async function getSessionUser(): Promise<{ id: string; email: string } | 
       });
 
       if (!user || user.status !== "ACTIVE") {
-        return null;
+        return null; // Fail closed
       }
 
       return {
         id: user.id,
         email: user.email
       };
+    } catch {
+      return null; // Fail closed
     }
-
-    return null;
   }
 
-  // Otherwise (in normal dev or production deployed app), completely bypass the login gate and auto-login Kristof (ADMIN)
-  return {
-    id: "44444444-4444-4444-4444-444444444444", // Kristof's fixed seed UUID
-    email: "kristof@vervliet.be",
-  };
+  return null;
 }
 
 /**
- * Resolves the authenticated user session to exactly one application profile.
+ * Resolves the authenticated user session to an application profile.
  * Fetches the user role and details from the database.
+ * Strictly fails closed on DB error or missing/inactive user.
  */
 export async function getCurrentUser(): Promise<AuthUser | null> {
-  const sessionUser = await getSessionUser();
+  let sessionUser: { id: string; email: string } | null = null;
+  try {
+    sessionUser = await getSessionUser();
+  } catch {
+    return null; // Fail closed
+  }
+
   if (!sessionUser) return null;
 
   try {
@@ -194,21 +212,22 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
       where: { id: sessionUser.id }
     });
 
-    // Auto-provision profile on first authentication
+    // Auto-provision profile on first authentication only if not found
+    // Default role is strictly VIEWER (never ADMIN)
     if (!profile) {
       profile = await prisma.user.create({
         data: {
           id: sessionUser.id,
           email: sessionUser.email,
-          name: sessionUser.email.split("@")[0] || "New User",
-          role: process.env.NODE_ENV === "test" ? UserRole.VIEWER : UserRole.ADMIN,
+          name: sessionUser.email ? sessionUser.email.split("@")[0] : "New User",
+          role: UserRole.VIEWER,
           status: "ACTIVE"
         }
       });
     }
 
     if (profile.status !== "ACTIVE") {
-      return null;
+      return null; // Fail closed for inactive/suspended accounts
     }
 
     return {
@@ -218,21 +237,15 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
       role: profile.role,
       status: profile.status,
     };
-  } catch (err) {
-    // Graceful fallback if database is unreachable (e.g., during next build compile phase)
-    return {
-      id: sessionUser.id,
-      name: "Kristof Vervliet",
-      email: sessionUser.email,
-      role: UserRole.ADMIN,
-      status: "ACTIVE"
-    };
+  } catch {
+    // Strictly fail closed if database is unreachable; NEVER grant admin access
+    return null;
   }
 }
 
 /**
  * Server-side guard to verify active role permissions.
- * Throws typed errors if authorization fails.
+ * Throws typed errors if authentication or authorization fails.
  */
 export async function checkRole(allowedRoles: UserRole[]): Promise<AuthUser> {
   const user = await getCurrentUser();

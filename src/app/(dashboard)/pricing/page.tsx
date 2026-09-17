@@ -10,7 +10,7 @@ export default async function PricingPage() {
   const user = await checkRole([UserRole.VIEWER, UserRole.FAMILY_SELLER, UserRole.ADMIN]);
 
   // Load all active price recommendations
-  let recommendations = await prisma.priceRecommendation.findMany({
+  const recommendations = await prisma.priceRecommendation.findMany({
     include: {
       productVariant: {
         include: {
@@ -27,39 +27,24 @@ export default async function PricingPage() {
     orderBy: { updatedAt: "desc" },
   });
 
-  // If no recommendations exist, auto-run an initial sweep across stock items
-  if (recommendations.length === 0) {
-    const { PriceEngineService } = await import("@/services/pricing/priceEngineService");
-    await PriceEngineService.runFullPricingSweep(15);
-    recommendations = await prisma.priceRecommendation.findMany({
-      include: {
-        productVariant: {
-          include: {
-            product: true,
-            listings: true,
-            balances: {
-              where: {
-                inventoryAccount: { type: "COMPANY" },
-              },
-            },
-          },
-        },
-      },
-      orderBy: { updatedAt: "desc" },
-    });
-  }
-
-
   // Map to client format
   const mappedRecommendations = recommendations.map((rec) => {
     const variant = rec.productVariant;
     const companyBalances = variant.balances;
     const totalCompanyQty = companyBalances.reduce((sum, b) => sum + b.quantity, 0);
-    
-    // Calculate average acquisition cost
-    const weightedCost = totalCompanyQty > 0
-      ? companyBalances.reduce((sum, b) => sum + b.quantity * Number(b.averageCost), 0) / totalCompanyQty
-      : 0;
+    const totalKnownCostTotal = companyBalances.reduce((sum, b) => sum + Number(b.knownCostTotal), 0);
+    const totalKnownQty = companyBalances.reduce((sum, b) => sum + b.knownCostQuantity, 0);
+
+    const cost: number | null = totalKnownQty > 0
+      ? Math.round((totalKnownCostTotal / totalKnownQty) * 100) / 100
+      : null;
+
+    let costBasisStatus: "FULLY_KNOWN" | "PARTIALLY_KNOWN" | "COMPLETELY_UNKNOWN" = "COMPLETELY_UNKNOWN";
+    if (totalKnownQty >= totalCompanyQty && totalCompanyQty > 0) {
+      costBasisStatus = "FULLY_KNOWN";
+    } else if (totalKnownQty > 0) {
+      costBasisStatus = "PARTIALLY_KNOWN";
+    }
 
     return {
       id: rec.id,
@@ -72,7 +57,8 @@ export default async function PricingPage() {
         condition: variant.condition,
         productName: variant.product.name,
         setNumber: variant.product.setNumber,
-        cost: weightedCost,
+        cost,
+        costBasisStatus,
         listings: variant.listings.map(l => ({
           id: l.id,
           marketplace: l.marketplace,

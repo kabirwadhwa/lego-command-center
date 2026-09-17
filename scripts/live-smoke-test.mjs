@@ -1,5 +1,5 @@
-const fs = require("fs");
-const path = require("path");
+import fs from "fs";
+import path from "path";
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
@@ -79,11 +79,10 @@ async function main() {
   }
 
   // Fetch variant details for assertions
-  let variant10330, variant10316;
+  let variant10330;
   try {
     const list = await apiQuery("productVariant", "findMany", { include: { product: true } });
     variant10330 = list.find(v => v.sku === "LGO-10330-NEW_SEALED");
-    variant10316 = list.find(v => v.sku === "LGO-10316-NEW_SEALED");
   } catch (err) {
     console.error("❌ Fatal: Failed to query seed variant IDs:", err.message);
     process.exit(1);

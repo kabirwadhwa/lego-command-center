@@ -1,4 +1,4 @@
-name: Integration Verification
+name: CI Pipeline
 
 on:
   push:
@@ -8,6 +8,13 @@ on:
 
 env:
   DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/lego_command_center_test"
+  NODE_ENV: "test"
+  NEXT_PUBLIC_DEMO_MODE: "true"
+  NEXT_PUBLIC_SUPABASE_URL: "https://mock.supabase.co"
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: "mock-anon-key"
+  SUPABASE_SERVICE_ROLE_KEY: "mock-service-role-key"
+  NEXTAUTH_SECRET: "ci-secret-at-least-32-characters-long-production-key"
+  NEXT_PUBLIC_APP_URL: "http://localhost:3000"
 
 jobs:
   verify:
@@ -15,7 +22,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:15
+        image: postgres:16
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -30,12 +37,12 @@ jobs:
 
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
           cache: 'npm'
 
       - name: Install Dependencies
@@ -44,17 +51,17 @@ jobs:
       - name: Generate Prisma Client
         run: npx prisma generate
 
-      - name: Lint Code
-        run: npm run lint
-
-      - name: Typecheck TypeScript
-        run: npx tsc --noEmit
-
       - name: Deploy Database Migrations
         run: npx prisma migrate deploy
 
       - name: Seed Test Database
         run: npx prisma db seed
+
+      - name: Lint Code
+        run: npm run lint
+
+      - name: Typecheck TypeScript
+        run: npm run typecheck
 
       - name: Run Tests
         run: npm run test

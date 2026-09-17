@@ -25,7 +25,8 @@ export interface RecommendationCard {
     condition: string;
     productName: string;
     setNumber: string;
-    cost: number;
+    cost: number | null;
+    costBasisStatus?: "FULLY_KNOWN" | "PARTIALLY_KNOWN" | "COMPLETELY_UNKNOWN";
     listings: ListingInfo[];
   };
 }
@@ -43,7 +44,13 @@ export default function PricingManager({ initialRecommendations, userRole }: Pri
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
+  const canEdit = userRole === "ADMIN" || userRole === "FAMILY_SELLER";
+
   const handleAccept = async (recId: string) => {
+    if (!canEdit) {
+      setErrorMsg("Insufficient permissions: Only Admins and Family Sellers may accept price changes.");
+      return;
+    }
     setActingId(recId);
     setErrorMsg(null);
     setSuccessMsg(null);
@@ -64,6 +71,10 @@ export default function PricingManager({ initialRecommendations, userRole }: Pri
   };
 
   const handleRunEngine = async () => {
+    if (!canEdit) {
+      setErrorMsg("Insufficient permissions: Only Admins and Family Sellers may run pricing sweeps.");
+      return;
+    }
     setIsSweeping(true);
     setErrorMsg(null);
     setSuccessMsg(null);
@@ -77,8 +88,9 @@ export default function PricingManager({ initialRecommendations, userRole }: Pri
       } else {
         setErrorMsg(res.error || "Failed to run pricing sweep.");
       }
-    } catch (err: any) {
-      setErrorMsg(err.message || "Pricing sweep failed.");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Pricing sweep failed.";
+      setErrorMsg(msg);
     } finally {
       setIsSweeping(false);
     }
@@ -97,14 +109,16 @@ export default function PricingManager({ initialRecommendations, userRole }: Pri
       } else {
         setErrorMsg(res.error || `Failed to refresh Catawiki data for ${setNumber}.`);
       }
-    } catch (err: any) {
-      setErrorMsg(err.message || "Failed to fetch Catawiki observations.");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to fetch Catawiki observations.";
+      setErrorMsg(msg);
     } finally {
       setRefreshingSet(null);
     }
   };
 
-  const fmt = (val: number) => {
+  const fmt = (val: number | null) => {
+    if (val === null || val === undefined) return "Unknown";
     return new Intl.NumberFormat("nl-BE", { style: "currency", currency: "EUR" }).format(val);
   };
 
@@ -156,12 +170,12 @@ export default function PricingManager({ initialRecommendations, userRole }: Pri
           <span className="text-4xl">✓</span>
           <h3 className="font-bold text-white text-lg">Portfolio Margins Optimized!</h3>
           <p className="text-slate-400 text-xs font-medium">
-            There are no active pricing recommendations pending review. Click "Run Pricing Engine Sweep" to scan the catalog against the latest Catawiki market observations.
+            There are no active pricing recommendations pending review. Click &quot;Run Pricing Engine Sweep&quot; to scan the catalog against the latest Catawiki market observations.
           </p>
           <button
             onClick={handleRunEngine}
-            disabled={isSweeping}
-            className="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg"
+            disabled={isSweeping || !canEdit}
+            className="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:cursor-not-allowed text-white text-xs font-bold rounded-lg"
           >
             {isSweeping ? "Running Sweep..." : "Run Pricing Engine Now"}
           </button>
@@ -169,10 +183,13 @@ export default function PricingManager({ initialRecommendations, userRole }: Pri
       ) : (
         <div className="grid grid-cols-1 gap-6 max-w-4xl">
           {recommendations.map((rec) => {
-            const margin = rec.recommendedPrice > 0
-              ? ((rec.recommendedPrice - rec.variant.cost) / rec.recommendedPrice) * 100
-              : 0;
-            const netProfit = rec.recommendedPrice > 0 ? rec.recommendedPrice - rec.variant.cost : 0;
+            const hasKnownCost = rec.variant.cost !== null && rec.variant.cost > 0;
+            const margin = hasKnownCost && rec.recommendedPrice > 0
+              ? ((rec.recommendedPrice - (rec.variant.cost as number)) / rec.recommendedPrice) * 100
+              : null;
+            const netProfit = hasKnownCost && rec.recommendedPrice > 0
+              ? rec.recommendedPrice - (rec.variant.cost as number)
+              : null;
             const isActing = actingId === rec.id;
             const isRefreshing = refreshingSet === rec.variant.setNumber;
             const confidence = extractConfidence(rec.reasoning);
@@ -223,6 +240,9 @@ export default function PricingManager({ initialRecommendations, userRole }: Pri
                       <span className="text-xs font-bold text-slate-200 block mt-0.5">
                         {fmt(rec.variant.cost)}
                       </span>
+                      {rec.variant.costBasisStatus === "PARTIALLY_KNOWN" && (
+                        <span className="text-[8px] text-amber-400 block font-medium">Partial Basis</span>
+                      )}
                     </div>
                     <div className="border-l border-slate-750 h-8 self-center" />
                     <div>
@@ -238,11 +258,17 @@ export default function PricingManager({ initialRecommendations, userRole }: Pri
                       <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">
                         Est. Margin
                       </span>
-                      <span className={`text-xs font-black block mt-0.5 ${
-                        margin > 30 ? "text-emerald-400" : margin > 15 ? "text-amber-400" : "text-rose-400"
-                      }`}>
-                        {margin.toFixed(1)}% (+{fmt(netProfit)})
-                      </span>
+                      {margin !== null ? (
+                        <span className={`text-xs font-black block mt-0.5 ${
+                          margin > 30 ? "text-emerald-400" : margin > 15 ? "text-amber-400" : "text-rose-400"
+                        }`}>
+                          {margin.toFixed(1)}% (+{fmt(netProfit)})
+                        </span>
+                      ) : (
+                        <span className="text-xs font-medium text-slate-400 block mt-0.5">
+                          N/A (Unknown Basis)
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -293,11 +319,12 @@ export default function PricingManager({ initialRecommendations, userRole }: Pri
 
                     <button
                       onClick={() => handleAccept(rec.id)}
-                      disabled={isActing}
-                      className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-800 text-white text-xs font-bold rounded-lg shadow transition-all cursor-pointer flex items-center gap-1.5"
+                      disabled={isActing || !canEdit}
+                      title={!canEdit ? "View Only: Admin or Family Seller required" : undefined}
+                      className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-750 disabled:text-slate-500 disabled:cursor-not-allowed text-white text-xs font-bold rounded-lg shadow transition-all cursor-pointer flex items-center gap-1.5"
                     >
                       <span>{isActing ? "⏳" : "✓"}</span>
-                      <span>{isActing ? "Applying..." : "Accept & Sync Price"}</span>
+                      <span>{isActing ? "Applying..." : canEdit ? "Accept & Sync Price" : "View Only"}</span>
                     </button>
                   </div>
                 </div>

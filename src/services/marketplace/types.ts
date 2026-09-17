@@ -62,6 +62,7 @@ export interface MarketplaceAdapter {
   getOrders(): Promise<MarketplaceOrder[]>;
   getOrder(externalOrderId: string): Promise<MarketplaceOrder | null>;
   syncInventory(sku: string, quantity: number, jobId?: string): Promise<{ success: boolean; status: SyncStatus; error?: string }>;
+  updatePrice?(externalListingId: string, price: number): Promise<{ success: boolean; error?: string }>;
   getListing(externalListingId: string): Promise<MarketplaceListing | null>;
   getListings(): Promise<MarketplaceListing[]>;
   getMarketPrices(sku: string): Promise<MarketplacePriceObservation[]>;

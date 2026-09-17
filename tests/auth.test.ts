@@ -196,4 +196,117 @@ describe("Supabase Auth User Identity, Hardening & Security separation tests", (
       expect(isDemoAuthEnabled()).toBe(false);
     });
   });
+
+  describe("Server-Side Authorization and Fail-Closed Role Enforcement", () => {
+    const adminUserUuid = "11111111-1111-1111-1111-111111111111";
+    const viewerUserUuid = "22222222-2222-2222-2222-222222222222";
+
+    beforeAll(async () => {
+      await prisma.user.upsert({
+        where: { id: adminUserUuid },
+        update: { role: UserRole.ADMIN, status: "ACTIVE" },
+        create: {
+          id: adminUserUuid,
+          email: "admin-auth-test@vervliet.be",
+          name: "Test Admin",
+          role: UserRole.ADMIN,
+          status: "ACTIVE",
+        },
+      });
+
+      await prisma.user.upsert({
+        where: { id: viewerUserUuid },
+        update: { role: UserRole.VIEWER, status: "ACTIVE" },
+        create: {
+          id: viewerUserUuid,
+          email: "viewer-auth-test@vervliet.be",
+          name: "Test Viewer",
+          role: UserRole.VIEWER,
+          status: "ACTIVE",
+        },
+      });
+    });
+
+    afterAll(async () => {
+      await prisma.user.deleteMany({
+        where: { id: { in: [adminUserUuid, viewerUserUuid] } },
+      });
+    });
+
+    test("anonymous user cannot execute inventory mutation (fails closed UNAUTHORIZED)", async () => {
+      process.env.APP_MODE = "production";
+      delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+      delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+      const { checkRole, AuthError } = await import("@/lib/auth");
+      await expect(checkRole([UserRole.ADMIN, UserRole.FAMILY_SELLER])).rejects.toThrow(AuthError);
+      await expect(checkRole([UserRole.ADMIN, UserRole.FAMILY_SELLER])).rejects.toHaveProperty("code", "UNAUTHORIZED");
+    });
+
+    test("anonymous user cannot execute pricing mutation (fails closed UNAUTHORIZED)", async () => {
+      process.env.APP_MODE = "production";
+      delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+      delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+      const { checkRole } = await import("@/lib/auth");
+      await expect(checkRole([UserRole.ADMIN, UserRole.FAMILY_SELLER])).rejects.toThrow(
+        "Authentication required. Please sign in."
+      );
+    });
+
+    test("anonymous user cannot execute marketplace sync (fails closed UNAUTHORIZED)", async () => {
+      process.env.APP_MODE = "production";
+      delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+      delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+      const { checkRole } = await import("@/lib/auth");
+      await expect(checkRole([UserRole.ADMIN])).rejects.toThrow(
+        "Authentication required. Please sign in."
+      );
+    });
+
+    test("authenticated VIEWER cannot execute ADMIN action (fails closed FORBIDDEN)", async () => {
+      process.env.APP_MODE = "development";
+      mockCookieGet.mockImplementation((name) => {
+        if (name === "lego_demo_user_id") return { value: viewerUserUuid };
+        return null;
+      });
+
+      const { checkRole, AuthError } = await import("@/lib/auth");
+      await expect(checkRole([UserRole.ADMIN])).rejects.toThrow(AuthError);
+      await expect(checkRole([UserRole.ADMIN])).rejects.toHaveProperty("code", "FORBIDDEN");
+    });
+
+    test("authenticated ADMIN can execute allowed ADMIN action", async () => {
+      process.env.APP_MODE = "development";
+      mockCookieGet.mockImplementation((name) => {
+        if (name === "lego_demo_user_id") return { value: adminUserUuid };
+        return null;
+      });
+
+      const { checkRole } = await import("@/lib/auth");
+      const user = await checkRole([UserRole.ADMIN]);
+      expect(user).toBeDefined();
+      expect(user.id).toBe(adminUserUuid);
+      expect(user.role).toBe(UserRole.ADMIN);
+    });
+
+    test("database failure during auth lookup fails closed rather than granting ADMIN", async () => {
+      process.env.APP_MODE = "development";
+      mockCookieGet.mockImplementation((name) => {
+        if (name === "lego_demo_user_id") return { value: adminUserUuid };
+        return null;
+      });
+
+      const spy = jest.spyOn(prisma.user, "findUnique").mockRejectedValue(new Error("Database connection lost"));
+
+      const { getCurrentUser, checkRole } = await import("@/lib/auth");
+      const user = await getCurrentUser();
+      expect(user).toBeNull(); // Must NOT return fallback Kristof ADMIN!
+
+      await expect(checkRole([UserRole.ADMIN])).rejects.toThrow("Authentication required. Please sign in.");
+      spy.mockRestore();
+    });
+  });
 });
+

@@ -1,9 +1,19 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getAppMode } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
+export async function GET() {
+  return new NextResponse("Not Found", { status: 404 });
+}
+
 export async function POST(request: Request) {
+  // Production security rule: Disable test/debug endpoints completely in production
+  if (getAppMode() === "production" || process.env.ENABLE_TEST_ROUTES !== "true") {
+    return new NextResponse("Not Found", { status: 404 });
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const token = searchParams.get("token");
@@ -20,15 +30,17 @@ export async function POST(request: Request) {
     }
 
     // Dynamic model access safely mapped
-    const prismaModel = (prisma as any)[model];
+    const client = prisma as unknown as Record<string, Record<string, (args: unknown) => Promise<unknown>>>;
+    const prismaModel = client[model];
     if (!prismaModel || typeof prismaModel[action] !== "function") {
       return new NextResponse(`Invalid model (${model}) or action (${action})`, { status: 400 });
     }
 
     const result = await prismaModel[action](args || {});
     return NextResponse.json(result);
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Test Query API error:", error);
-    return new NextResponse(error.message || "Internal Error", { status: 500 });
+    const msg = error instanceof Error ? error.message : "Internal Error";
+    return new NextResponse(msg, { status: 500 });
   }
 }

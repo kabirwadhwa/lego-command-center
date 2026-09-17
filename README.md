@@ -131,15 +131,54 @@ All marketplace integrations implement a common interface layout:
 
 ---
 
-## 13. Deployment
-- Compiles via Next.js server builds:
+## 13. Deployment & Railway Configuration
+- **Railway Configuration**: Fully configured with `railway.json` and `Procfile`.
+- **Web Service**:
+  - Build command: `npm run build` (`prisma generate && next build`)
+  - Start command: `npm start` (`prisma migrate deploy && next start`)
+- **Background Worker Service**:
+  - Deploy a secondary service from the same repo with start command: `npm run worker`
+  - Concurrently claims and executes background tasks via PostgreSQL `FOR UPDATE SKIP LOCKED`.
+- **Required Production Environment Variables**:
   ```bash
-  npm run build
+  DATABASE_URL="postgresql://postgres:password@postgres.railway.internal:5432/railway"
+  NEXT_PUBLIC_DEMO_MODE="false"
+  NEXT_PUBLIC_APP_URL="https://your-production-app.up.railway.app"
+  NEXT_PUBLIC_SUPABASE_URL="https://your-project.supabase.co"
+  NEXT_PUBLIC_SUPABASE_ANON_KEY="your-anon-key"
+  SUPABASE_SERVICE_ROLE_KEY="your-service-role-key"
+  NEXTAUTH_SECRET="strong-random-secret-at-least-32-chars"
+  SHOPIFY_SHOP_DOMAIN="your-store.myshopify.com"
+  SHOPIFY_ADMIN_ACCESS_TOKEN="shpat_your_token"
+  SHOPIFY_WEBHOOK_SECRET="your_webhook_signing_key"
+  APIFY_API_TOKEN="apify_api_your_token"
   ```
-- Can be deployed on Vercel, Docker containers, or Node hosts. Make sure `DATABASE_URL` and Supabase variables are set up in the production environment.
 
 ---
 
-## 14. Known Limitations
-- Modifying historical transaction entries is locked. Any corrections require creating a correcting ledger transaction.
-- External webhook calls require a public URL endpoint (configured in Supabase/Shopify dashboards) to receive live payload events in REAL mode.
+## 14. Shopify Verification & Safety CLI
+Before executing live synchronization against a production Shopify store, run the read-only verification utility:
+```bash
+npx ts-node scripts/verify-shopify-integration.ts
+```
+This utility safely tests:
+1. Admin API token validity and shop permissions (`shop` query)
+2. Inventory fulfillment location identifiers
+3. Live product catalog sample inspection
+4. Local database SKU cross-referencing and mapping readiness
+
+---
+
+## 15. Accounting Invariants & Cost Basis Architecture
+The inventory engine enforces strict accounting invariants:
+- **Unknown-Cost Preservation**: Intake without known cost basis never converts to €0.00 and never dilutes the existing weighted-average cost basis of known units.
+- **Proportional Depletion**: Sales deplete known and unknown units proportionally to preserve truthful balance sheet records.
+- **Audit Logging**: Every intake, transfer, sale, and adjustment creates an immutable double-entry ledger event.
+
+---
+
+## 16. Pricing Recommendation Engine
+- **Breakeven Floor**: Deterministic calculations per marketplace incorporating marketplace commission, payment processor fixed/variable fees, and outbound packaging/shipping costs.
+- **Strict Provenance Filtering**: Exclusively consumes observations tagged as `LIVE_API`, `LIVE_SCRAPE`, `MANUAL`, or `IMPORTED`. Synthetic `SIMULATED` observations are strictly excluded in production.
+- **Confidence Scoring**: Evaluates observation recency, sample size, price dispersion (coefficient of variation), and transaction type (`SOLD_PRICE` vs `ASKING_PRICE`).
+- **Insufficient Evidence Guard**: Emits an `INSUFFICIENT_MARKET_EVIDENCE` alert whenever fewer than 2 genuine market observations exist.

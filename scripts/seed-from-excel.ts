@@ -44,7 +44,7 @@ export async function runExcelSeed() {
 
   // 1. Core Users
   console.log("Seeding core users...");
-  const kristof = await prisma.user.upsert({
+  await prisma.user.upsert({
     where: { id: "44444444-4444-4444-4444-444444444444" },
     update: {},
     create: {
@@ -56,7 +56,7 @@ export async function runExcelSeed() {
     }
   });
 
-  const sabine = await prisma.user.upsert({
+  await prisma.user.upsert({
     where: { id: "55555555-5555-5555-5555-555555555555" },
     update: {},
     create: {

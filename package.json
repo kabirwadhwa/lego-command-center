@@ -7,6 +7,7 @@
     "build": "prisma generate && next build",
     "start": "prisma migrate deploy && next start",
     "lint": "eslint",
+    "typecheck": "tsc --noEmit",
     "test": "jest --runInBand",
     "test:live:shopify": "jest tests/shopify_live.test.ts --runInBand",
     "worker": "ts-node src/worker.ts"
@@ -17,7 +18,7 @@
     "@supabase/ssr": "^0.12.4",
     "@supabase/supabase-js": "^2.112.3",
     "lucide-react": "^1.31.0",
-    "next": "16.3.1",
+    "next": "^16.3.5",
     "pg": "^8.23.0",
     "react": "19.2.8",
     "react-dom": "19.2.8"
@@ -32,7 +33,7 @@
     "@types/react-dom": "^19",
     "dotenv": "^17.4.2",
     "eslint": "^9",
-    "eslint-config-next": "16.3.1",
+    "eslint-config-next": "^16.3.5",
     "jest": "^30.4.2",
     "prisma": "^7.9.1",
     "tailwindcss": "^4",

@@ -1,12 +1,30 @@
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 const query = `
-mutation {
-  serviceInstanceDeploy(
-    environmentId: "b3147a05-f56f-4633-96e7-5d26870da2c3"
-    serviceId: "83d6170a-b691-4a07-ac40-85140af99e1e"
-    latestCommit: true
-  )
+query {
+  projectToken {
+    project {
+      services {
+        edges {
+          node {
+            name
+            id
+            serviceInstances {
+              edges {
+                node {
+                  latestDeployment {
+                    id
+                    status
+                    createdAt
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
 }
 `;
 
@@ -29,5 +47,5 @@ fetch("https://backboard.railway.app/graphql/v2", {
   console.log(JSON.stringify(data, null, 2));
 })
 .catch(err => {
-  console.error("Error triggering deploy:", err);
+  console.error("Error fetching deployments:", err);
 });

@@ -173,27 +173,30 @@ export async function commitShopifyImportAction(params: {
         const existing = balances[0];
         if (existing) {
           const oldQty = existing.quantity;
-          const oldAvgCost = Number(existing.averageCost);
+          const oldKnownQty = existing.knownCostQuantity ?? 0;
+          const oldKnownTotal = existing.knownCostTotal !== null ? Number(existing.knownCostTotal) : 0;
           const newQty = oldQty + item.quantity;
-          const unitCost = 0.00;
-          const newAvgCost = (oldQty * oldAvgCost + item.quantity * unitCost) / newQty;
+          const avgCost = oldKnownQty > 0 ? oldKnownTotal / oldKnownQty : null;
 
           await tx.inventoryBalance.update({
             where: { id: existing.id },
             data: {
               quantity: newQty,
-              averageCost: new Prisma.Decimal(newAvgCost),
+              knownCostQuantity: oldKnownQty,
+              knownCostTotal: new Prisma.Decimal(oldKnownTotal),
+              averageCost: avgCost !== null ? new Prisma.Decimal(avgCost) : null,
               lastUpdated: new Date(),
             },
           });
         } else {
-          const unitCost = 0.00;
           await tx.inventoryBalance.create({
             data: {
               productVariantId: variant.id,
               inventoryAccountId: params.inventoryAccountId,
               quantity: item.quantity,
-              averageCost: new Prisma.Decimal(unitCost),
+              knownCostQuantity: 0,
+              knownCostTotal: new Prisma.Decimal(0.00),
+              averageCost: null,
             },
           });
         }

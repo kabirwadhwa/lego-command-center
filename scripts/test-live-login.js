@@ -1,6 +1,4 @@
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-
-const BASE_URL = "https://lego-command-center-production.up.railway.app";
+const BASE_URL = process.env.LIVE_APP_URL || "https://lego-command-center-production.up.railway.app";
 
 async function testLogin() {
   console.log("Testing login flow on live Railway app...");

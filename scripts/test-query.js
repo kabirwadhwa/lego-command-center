@@ -11,7 +11,13 @@ const body = {
   }
 };
 
-fetch("https://lego-command-center-production.up.railway.app/api/test/query?token=7919a1be-8967-4e2d-a3a6-1b11cf106a64", {
+const token = process.env.TEST_AUTH_TOKEN;
+if (!token) {
+  console.error("Error: TEST_AUTH_TOKEN environment variable is required.");
+  process.exit(1);
+}
+
+fetch(`https://lego-command-center-production.up.railway.app/api/test/query?token=${encodeURIComponent(token)}`, {
   method: "POST",
   headers: {
     "Content-Type": "application/json"

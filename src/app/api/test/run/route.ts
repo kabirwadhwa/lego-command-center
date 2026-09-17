@@ -1,10 +1,20 @@
 import { NextResponse } from "next/server";
 import { InventoryService } from "@/services/inventoryService";
 import { ActorType } from "@prisma/client";
+import { getAppMode } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
+export async function GET() {
+  return new NextResponse("Not Found", { status: 404 });
+}
+
 export async function POST(request: Request) {
+  // Production security rule: Disable test/debug endpoints completely in production
+  if (getAppMode() === "production" || process.env.ENABLE_TEST_ROUTES !== "true") {
+    return new NextResponse("Not Found", { status: 404 });
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const token = searchParams.get("token");
@@ -62,8 +72,9 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json({ success: true, result });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Test Run API error:", error);
-    return NextResponse.json({ success: false, error: error.message || "Internal Error" }, { status: 500 });
+    const msg = error instanceof Error ? error.message : "Internal Error";
+    return NextResponse.json({ success: false, error: msg }, { status: 500 });
   }
 }

@@ -15,7 +15,7 @@ interface RoleSwitcherProps {
 
 export default function RoleSwitcher({ currentUser }: RoleSwitcherProps) {
   const router = useRouter();
-  const [activeUser, setActiveUser] = useState(currentUser?.id || "44444444-4444-4444-4444-444444444444");
+  const [activeUser, setActiveUser] = useState(currentUser?.id || "");
   const [loading, setLoading] = useState(false);
 
   const handleSwitch = async (userId: string) => {

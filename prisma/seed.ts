@@ -288,6 +288,8 @@ interface DemoVariant {
             inventoryAccountId: companyAccount.id,
             quantity: varData.companyQty,
             averageCost: varData.cost,
+            knownCostQuantity: varData.companyQty,
+            knownCostTotal: varData.cost * varData.companyQty,
           },
         });
 
@@ -313,6 +315,8 @@ interface DemoVariant {
             inventoryAccountId: personalAccount.id,
             quantity: varData.personalQty,
             averageCost: varData.cost,
+            knownCostQuantity: varData.personalQty,
+            knownCostTotal: varData.cost * varData.personalQty,
           },
         });
 

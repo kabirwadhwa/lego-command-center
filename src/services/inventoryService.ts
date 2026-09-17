@@ -92,36 +92,36 @@ export class InventoryService {
         `;
 
         const existingBalance = balances[0];
-        let newQty = item.quantity;
-        let newAvgCost = item.unitCost;
 
         if (existingBalance) {
           const oldQty = existingBalance.quantity;
-          const oldAvgCost = existingBalance.averageCost !== null ? Number(existingBalance.averageCost) : null;
-          newQty = oldQty + item.quantity;
-          
-          if (oldAvgCost === null) {
-            newAvgCost = item.unitCost;
-          } else {
-            // Weighted moving average cost formula:
-            newAvgCost = (oldQty * oldAvgCost + item.quantity * item.unitCost) / newQty;
-          }
+          const oldKnownQty = existingBalance.knownCostQuantity ?? 0;
+          const oldKnownTotal = existingBalance.knownCostTotal !== null ? Number(existingBalance.knownCostTotal) : 0;
+
+          const newQty = oldQty + item.quantity;
+          const newKnownQty = oldKnownQty + item.quantity;
+          const newKnownTotal = oldKnownTotal + (item.quantity * item.unitCost);
+          const newAvgCost = newKnownTotal / newKnownQty;
 
           await tx.inventoryBalance.update({
             where: { id: existingBalance.id },
             data: {
               quantity: newQty,
+              knownCostQuantity: newKnownQty,
+              knownCostTotal: new Prisma.Decimal(newKnownTotal),
               averageCost: new Prisma.Decimal(newAvgCost),
               lastUpdated: new Date(),
             },
           });
         } else {
-          // If no balance exists, insert it
+          const totalKnown = item.quantity * item.unitCost;
           await tx.inventoryBalance.create({
             data: {
               productVariantId: item.productVariantId,
               inventoryAccountId: item.inventoryAccountId,
               quantity: item.quantity,
+              knownCostQuantity: item.quantity,
+              knownCostTotal: new Prisma.Decimal(totalKnown),
               averageCost: new Prisma.Decimal(item.unitCost),
             },
           });
@@ -239,14 +239,43 @@ export class InventoryService {
           );
         }
 
-        const costAtSale = existingBalance.averageCost !== null ? Number(existingBalance.averageCost) : null;
+        const totalQty = existingBalance.quantity;
+        const knownQty = existingBalance.knownCostQuantity ?? 0;
+        const knownTotal = existingBalance.knownCostTotal !== null ? Number(existingBalance.knownCostTotal) : 0;
+        const avgCost = existingBalance.averageCost !== null ? Number(existingBalance.averageCost) : null;
+
+        // Proportional depletion of known cost units
+        let soldKnownQty = 0;
+        if (knownQty === totalQty) {
+          soldKnownQty = item.quantity;
+        } else if (knownQty === 0) {
+          soldKnownQty = 0;
+        } else {
+          soldKnownQty = Math.min(knownQty, Math.round(item.quantity * (knownQty / totalQty)));
+        }
+
+        const remainingKnownQty = Math.max(0, knownQty - soldKnownQty);
+        let remainingKnownTotal = 0;
+        let costAtSale: number | null = null;
+
+        if (soldKnownQty > 0 && avgCost !== null) {
+          costAtSale = avgCost;
+          remainingKnownTotal = Math.max(0, knownTotal - (soldKnownQty * avgCost));
+        } else if (knownQty > 0 && avgCost !== null) {
+          remainingKnownTotal = knownTotal;
+        }
+
+        const newAvgCost = remainingKnownQty > 0 ? remainingKnownTotal / remainingKnownQty : null;
         const lineRevenue = item.quantity * item.unitSalePrice;
 
         // Decrement balance
         await tx.inventoryBalance.update({
           where: { id: existingBalance.id },
           data: {
-            quantity: existingBalance.quantity - item.quantity,
+            quantity: totalQty - item.quantity,
+            knownCostQuantity: remainingKnownQty,
+            knownCostTotal: new Prisma.Decimal(remainingKnownTotal),
+            averageCost: newAvgCost !== null ? new Prisma.Decimal(newAvgCost) : null,
             lastUpdated: new Date(),
           },
         });
@@ -363,7 +392,25 @@ export class InventoryService {
         );
       }
 
-      const costBasis = sourceBalance.averageCost !== null ? Number(sourceBalance.averageCost) : null;
+      const srcTotalQty = sourceBalance.quantity;
+      const srcKnownQty = sourceBalance.knownCostQuantity ?? 0;
+      const srcKnownTotal = sourceBalance.knownCostTotal !== null ? Number(sourceBalance.knownCostTotal) : 0;
+      const srcAvgCost = sourceBalance.averageCost !== null ? Number(sourceBalance.averageCost) : null;
+
+      // Determine proportional units of known cost transferred
+      let transKnownQty = 0;
+      if (srcKnownQty === srcTotalQty) {
+        transKnownQty = quantity;
+      } else if (srcKnownQty === 0) {
+        transKnownQty = 0;
+      } else {
+        transKnownQty = Math.min(srcKnownQty, Math.round(quantity * (srcKnownQty / srcTotalQty)));
+      }
+
+      const transKnownValue = (transKnownQty > 0 && srcAvgCost !== null) ? transKnownQty * srcAvgCost : 0;
+      const newSrcKnownQty = Math.max(0, srcKnownQty - transKnownQty);
+      const newSrcKnownTotal = Math.max(0, srcKnownTotal - transKnownValue);
+      const newSrcAvgCost = newSrcKnownQty > 0 ? newSrcKnownTotal / newSrcKnownQty : null;
 
       // Lock destination balance row FOR UPDATE (if exists)
       const destBalances = await tx.$queryRaw<InventoryBalance[]>`
@@ -378,32 +425,31 @@ export class InventoryService {
       await tx.inventoryBalance.update({
         where: { id: sourceBalance.id },
         data: {
-          quantity: sourceBalance.quantity - quantity,
+          quantity: srcTotalQty - quantity,
+          knownCostQuantity: newSrcKnownQty,
+          knownCostTotal: new Prisma.Decimal(newSrcKnownTotal),
+          averageCost: newSrcAvgCost !== null ? new Prisma.Decimal(newSrcAvgCost) : null,
           lastUpdated: new Date(),
         },
       });
 
       if (destBalance) {
-        const destOldQty = destBalance.quantity;
-        const destOldAvgCost = destBalance.averageCost !== null ? Number(destBalance.averageCost) : null;
-        const destNewQty = destOldQty + quantity;
-        let destNewAvgCost: number | null = null;
+        const destTotalQty = destBalance.quantity;
+        const destKnownQty = destBalance.knownCostQuantity ?? 0;
+        const destKnownTotal = destBalance.knownCostTotal !== null ? Number(destBalance.knownCostTotal) : 0;
 
-        if (destOldAvgCost === null && costBasis === null) {
-          destNewAvgCost = null;
-        } else if (destOldAvgCost === null && costBasis !== null) {
-          destNewAvgCost = costBasis;
-        } else if (destOldAvgCost !== null && costBasis === null) {
-          destNewAvgCost = destOldAvgCost;
-        } else if (destOldAvgCost !== null && costBasis !== null) {
-          destNewAvgCost = (destOldQty * destOldAvgCost + quantity * costBasis) / destNewQty;
-        }
+        const newDestTotal = destTotalQty + quantity;
+        const newDestKnownQty = destKnownQty + transKnownQty;
+        const newDestKnownTotal = destKnownTotal + transKnownValue;
+        const newDestAvgCost = newDestKnownQty > 0 ? newDestKnownTotal / newDestKnownQty : null;
 
         await tx.inventoryBalance.update({
           where: { id: destBalance.id },
           data: {
-            quantity: destNewQty,
-            averageCost: destNewAvgCost !== null ? new Prisma.Decimal(destNewAvgCost) : null,
+            quantity: newDestTotal,
+            knownCostQuantity: newDestKnownQty,
+            knownCostTotal: new Prisma.Decimal(newDestKnownTotal),
+            averageCost: newDestAvgCost !== null ? new Prisma.Decimal(newDestAvgCost) : null,
             lastUpdated: new Date(),
           },
         });
@@ -413,10 +459,14 @@ export class InventoryService {
             productVariantId,
             inventoryAccountId: destinationAccountId,
             quantity,
-            averageCost: costBasis !== null ? new Prisma.Decimal(costBasis) : null,
+            knownCostQuantity: transKnownQty,
+            knownCostTotal: new Prisma.Decimal(transKnownValue),
+            averageCost: transKnownQty > 0 ? new Prisma.Decimal(transKnownValue / transKnownQty) : null,
           },
         });
       }
+
+      const costBasis = srcAvgCost;
 
       // 3. Create linked double-entry transactions
       const tx1 = await tx.inventoryTransaction.create({
@@ -501,7 +551,11 @@ export class InventoryService {
       `;
 
       const existingBalance = balances[0];
-      const costBasis = unitCost ?? (existingBalance && existingBalance.averageCost !== null ? Number(existingBalance.averageCost) : null);
+      const curKnownQty = existingBalance ? (existingBalance.knownCostQuantity ?? 0) : 0;
+      const curKnownTotal = existingBalance && existingBalance.knownCostTotal !== null ? Number(existingBalance.knownCostTotal) : 0;
+
+      let newKnownQty = curKnownQty;
+      let newKnownTotal = curKnownTotal;
 
       if (existingBalance) {
         const newQty = existingBalance.quantity + quantityChange;
@@ -509,26 +563,29 @@ export class InventoryService {
           throw new DomainError("INSUFFICIENT_STOCK", "Adjustment would result in negative stock balance.");
         }
 
-        // Recalculate average cost only if we are adding stock
-        let newAvgCost = existingBalance.averageCost !== null ? Number(existingBalance.averageCost) : null;
         if (quantityChange > 0) {
-          const oldQty = existingBalance.quantity;
-          const oldAvgCost = newAvgCost;
-          if (oldAvgCost === null && costBasis === null) {
-            newAvgCost = null;
-          } else if (oldAvgCost === null && costBasis !== null) {
-            newAvgCost = costBasis;
-          } else if (oldAvgCost !== null && costBasis === null) {
-            newAvgCost = oldAvgCost;
-          } else if (oldAvgCost !== null && costBasis !== null) {
-            newAvgCost = (oldQty * oldAvgCost + quantityChange * costBasis) / newQty;
+          if (unitCost !== undefined && unitCost !== null && unitCost > 0) {
+            newKnownQty += quantityChange;
+            newKnownTotal += quantityChange * unitCost;
           }
+        } else if (quantityChange < 0) {
+          const deductQty = Math.abs(quantityChange);
+          const deductKnown = curKnownQty === existingBalance.quantity
+            ? deductQty
+            : Math.min(curKnownQty, Math.round(deductQty * (curKnownQty / (existingBalance.quantity || 1))));
+          newKnownQty = Math.max(0, curKnownQty - deductKnown);
+          const unitAvg = curKnownQty > 0 ? curKnownTotal / curKnownQty : 0;
+          newKnownTotal = Math.max(0, curKnownTotal - (deductKnown * unitAvg));
         }
+
+        const newAvgCost = newKnownQty > 0 ? newKnownTotal / newKnownQty : null;
 
         await tx.inventoryBalance.update({
           where: { id: existingBalance.id },
           data: {
             quantity: newQty,
+            knownCostQuantity: newKnownQty,
+            knownCostTotal: new Prisma.Decimal(newKnownTotal),
             averageCost: newAvgCost !== null ? new Prisma.Decimal(newAvgCost) : null,
             lastUpdated: new Date(),
           },
@@ -537,15 +594,25 @@ export class InventoryService {
         if (quantityChange < 0) {
           throw new DomainError("INSUFFICIENT_STOCK", "Adjustment would result in negative stock balance.");
         }
+        const hasKnownCost = unitCost !== undefined && unitCost !== null && unitCost > 0;
+        const knownQty = hasKnownCost ? quantityChange : 0;
+        const knownTotal = hasKnownCost ? quantityChange * unitCost! : 0;
+
         await tx.inventoryBalance.create({
           data: {
             productVariantId,
             inventoryAccountId,
             quantity: quantityChange,
-            averageCost: costBasis !== null ? new Prisma.Decimal(costBasis) : null,
+            knownCostQuantity: knownQty,
+            knownCostTotal: new Prisma.Decimal(knownTotal),
+            averageCost: hasKnownCost ? new Prisma.Decimal(unitCost!) : null,
           },
         });
       }
+
+      const costBasis = (unitCost !== undefined && unitCost !== null && unitCost > 0)
+        ? unitCost
+        : (newKnownQty > 0 ? newKnownTotal / newKnownQty : null);
 
       // 2. Log transaction ledger entry
       await tx.inventoryTransaction.create({
@@ -575,6 +642,32 @@ export class InventoryService {
 
       return { success: true };
     });
+  }
+
+  /**
+   * Helper to inspect and categorize inventory cost basis state.
+   */
+  static getCostBasisStatus(balance: {
+    quantity: number;
+    knownCostQuantity?: number | null;
+    averageCost?: Prisma.Decimal | number | null;
+  }): {
+    status: "FULLY_KNOWN" | "PARTIALLY_KNOWN" | "COMPLETELY_UNKNOWN";
+    knownQuantity: number;
+    totalQuantity: number;
+    averageKnownCost: number | null;
+  } {
+    const totalQty = balance.quantity;
+    const knownQty = balance.knownCostQuantity ?? (balance.averageCost ? totalQty : 0);
+    const avgCost = balance.averageCost !== null && balance.averageCost !== undefined ? Number(balance.averageCost) : null;
+
+    if (totalQty === 0 || knownQty === 0 || avgCost === null) {
+      return { status: "COMPLETELY_UNKNOWN", knownQuantity: 0, totalQuantity: totalQty, averageKnownCost: null };
+    }
+    if (knownQty >= totalQty) {
+      return { status: "FULLY_KNOWN", knownQuantity: totalQty, totalQuantity: totalQty, averageKnownCost: avgCost };
+    }
+    return { status: "PARTIALLY_KNOWN", knownQuantity: knownQty, totalQuantity: totalQty, averageKnownCost: avgCost };
   }
 }
 

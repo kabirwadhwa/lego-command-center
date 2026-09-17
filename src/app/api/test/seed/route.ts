@@ -6,11 +6,11 @@ import {
   MarketplaceType,
   ListingStatus,
   ProductCondition,
-  VariantStatus,
-  PurchaseStatus
+  VariantStatus
 } from "@prisma/client";
 import fs from "fs";
 import path from "path";
+import { getAppMode } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +27,16 @@ interface SeedItem {
   status: string;
 }
 
+export async function GET() {
+  return new NextResponse("Not Found", { status: 404 });
+}
+
 export async function POST(request: Request) {
+  // Production security rule: Disable test/debug endpoints completely in production
+  if (getAppMode() === "production" || process.env.ENABLE_TEST_ROUTES !== "true") {
+    return new NextResponse("Not Found", { status: 404 });
+  }
+
   try {
     const { searchParams } = new URL(request.url);
     const token = searchParams.get("token");
@@ -39,7 +48,7 @@ export async function POST(request: Request) {
     console.log("Seeding production database with complete inventory...");
 
     // 1. Seed Users
-    const kristof = await prisma.user.upsert({
+    await prisma.user.upsert({
       where: { id: "44444444-4444-4444-4444-444444444444" },
       update: {},
       create: {
@@ -51,7 +60,7 @@ export async function POST(request: Request) {
       }
     });
 
-    const sabine = await prisma.user.upsert({
+    await prisma.user.upsert({
       where: { id: "55555555-5555-5555-5555-555555555555" },
       update: {},
       create: {
@@ -257,8 +266,9 @@ export async function POST(request: Request) {
 
     console.log("Full database seeding completed successfully.");
     return NextResponse.json({ success: true, count: rawData.length });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Test Seed API error:", error);
-    return NextResponse.json({ success: false, error: error.message || "Internal Error" }, { status: 500 });
+    const msg = error instanceof Error ? error.message : "Internal Error";
+    return NextResponse.json({ success: false, error: msg }, { status: 500 });
   }
 }

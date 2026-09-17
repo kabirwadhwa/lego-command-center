@@ -18,13 +18,14 @@ export async function POST(request: Request) {
     where: { id: MarketplaceType.SHOPIFY },
   });
 
-  const isDemo = shopify?.mode === "DEMO";
-  let webhookSecret = "";
+  let webhookSecret = process.env.SHOPIFY_WEBHOOK_SECRET || "";
 
   if (shopify?.credentialsJson) {
     try {
       const creds = JSON.parse(shopify.credentialsJson);
-      webhookSecret = creds.webhookSecret || "";
+      if (creds.webhookSecret) {
+        webhookSecret = creds.webhookSecret;
+      }
     } catch {
       // Ignore parse errors
     }
@@ -32,8 +33,11 @@ export async function POST(request: Request) {
 
   const rawBody = await request.text();
 
-  // 2. Validate HMAC signature (skip ONLY if in DEMO mode AND webhookSecret is empty)
+  // 2. Validate HMAC signature
+  // Production rule: ALWAYS verify signature. In demo mode, skip ONLY if no secret is configured.
+  const isDemo = shopify?.mode === "DEMO";
   const shouldVerify = !isDemo || !!webhookSecret;
+
   if (shouldVerify) {
     if (!hmacHeader || !webhookSecret) {
       return new NextResponse("Unauthorized: Missing signature credentials", { status: 401 });
@@ -44,7 +48,13 @@ export async function POST(request: Request) {
       .update(rawBody, "utf8")
       .digest("base64");
 
-    if (computedHmac !== hmacHeader) {
+    const computedBuf = Buffer.from(computedHmac, "utf8");
+    const headerBuf = Buffer.from(hmacHeader, "utf8");
+
+    if (
+      computedBuf.length !== headerBuf.length ||
+      !crypto.timingSafeEqual(computedBuf, headerBuf)
+    ) {
       return new NextResponse("Unauthorized: Invalid signature", { status: 401 });
     }
   }

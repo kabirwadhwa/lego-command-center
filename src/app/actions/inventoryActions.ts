@@ -296,39 +296,40 @@ export async function bulkImportAction(params: {
         `;
 
         const existingBalance = balances[0];
-        const unitCostVal = (row.unitCost !== undefined && row.unitCost !== null) ? Number(row.unitCost) : null;
-        let newAvgCost: number | null = null;
+        const unitCostVal = (row.unitCost !== undefined && row.unitCost !== null && Number(row.unitCost) > 0) ? Number(row.unitCost) : null;
+        const hasKnownCost = unitCostVal !== null;
 
         if (existingBalance) {
           const oldQty = existingBalance.quantity;
-          const oldAvgCost = existingBalance.averageCost !== null ? Number(existingBalance.averageCost) : null;
-          const newQty = oldQty + row.quantity;
+          const oldKnownQty = existingBalance.knownCostQuantity ?? 0;
+          const oldKnownTotal = existingBalance.knownCostTotal !== null ? Number(existingBalance.knownCostTotal) : 0;
 
-          if (oldAvgCost === null && unitCostVal === null) {
-            newAvgCost = null;
-          } else if (oldAvgCost === null && unitCostVal !== null) {
-            newAvgCost = unitCostVal;
-          } else if (oldAvgCost !== null && unitCostVal === null) {
-            newAvgCost = oldAvgCost;
-          } else if (oldAvgCost !== null && unitCostVal !== null) {
-            newAvgCost = (oldQty * oldAvgCost + row.quantity * unitCostVal) / newQty;
-          }
+          const newQty = oldQty + row.quantity;
+          const newKnownQty = hasKnownCost ? oldKnownQty + row.quantity : oldKnownQty;
+          const newKnownTotal = hasKnownCost ? oldKnownTotal + (row.quantity * unitCostVal!) : oldKnownTotal;
+          const newAvgCost = newKnownQty > 0 ? newKnownTotal / newKnownQty : null;
 
           await tx.inventoryBalance.update({
             where: { id: existingBalance.id },
             data: {
               quantity: newQty,
+              knownCostQuantity: newKnownQty,
+              knownCostTotal: new Prisma.Decimal(newKnownTotal),
               averageCost: newAvgCost !== null ? new Prisma.Decimal(newAvgCost) : null,
               lastUpdated: new Date()
             }
           });
         } else {
+          const knownQty = hasKnownCost ? row.quantity : 0;
+          const knownTotal = hasKnownCost ? row.quantity * unitCostVal! : 0;
           await tx.inventoryBalance.create({
             data: {
               productVariantId: variant.id,
               inventoryAccountId: params.inventoryAccountId,
               quantity: row.quantity,
-              averageCost: unitCostVal !== null ? new Prisma.Decimal(unitCostVal) : null
+              knownCostQuantity: knownQty,
+              knownCostTotal: new Prisma.Decimal(knownTotal),
+              averageCost: hasKnownCost ? new Prisma.Decimal(unitCostVal!) : null
             }
           });
         }

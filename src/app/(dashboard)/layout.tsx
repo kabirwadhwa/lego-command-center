@@ -1,3 +1,4 @@
+import React, { Suspense } from "react";
 import Sidebar from "@/components/Sidebar";
 import TopBar from "@/components/TopBar";
 import { getCurrentUser, getAppMode } from "@/lib/auth";
@@ -6,7 +7,9 @@ import prisma from "@/lib/prisma";
 import TransferModal from "@/components/TransferModal";
 import AdjustModal from "@/components/AdjustModal";
 import SellModal from "@/components/SellModal";
-import React from "react";
+import { Prisma, InventoryAccount } from "@prisma/client";
+
+type VariantWithProduct = Prisma.ProductVariantGetPayload<{ include: { product: true } }>;
 
 export const dynamic = "force-dynamic";
 
@@ -24,8 +27,8 @@ export default async function DashboardLayout({
   }
 
   // Query database configuration details for quick action modals
-  let variants: any[] = [];
-  let accounts: any[] = [];
+  let variants: VariantWithProduct[] = [];
+  let accounts: InventoryAccount[] = [];
 
   try {
     variants = await prisma.productVariant.findMany({
@@ -47,9 +50,9 @@ export default async function DashboardLayout({
       <Sidebar userRole={user.role} />
 
       {/* Top Header Section */}
-      <React.Suspense fallback={<div className="h-16 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900" />}>
+      <Suspense fallback={<div className="h-16 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900" />}>
         <TopBar currentUser={user} showRoleSwitcher={getAppMode() !== "production"} />
-      </React.Suspense>
+      </Suspense>
 
       {/* Main View Area */}
       <main className="pl-64 pt-16 min-h-screen">
@@ -59,11 +62,11 @@ export default async function DashboardLayout({
       </main>
 
       {/* Global Quick Action Modals */}
-      <React.Suspense fallback={null}>
+      <Suspense fallback={null}>
         <TransferModal variants={variants} accounts={accounts} />
         <AdjustModal variants={variants} accounts={accounts} />
         <SellModal variants={variants} accounts={accounts} />
-      </React.Suspense>
+      </Suspense>
     </div>
   );
 }

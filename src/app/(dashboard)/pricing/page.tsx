@@ -50,6 +50,13 @@ export default async function PricingPage() {
       id: rec.id,
       recommendedPrice: Number(rec.recommendedPrice),
       reasoning: rec.reasoning,
+      confidenceScore: rec.confidenceScore,
+      confidenceTier: rec.confidenceTier,
+      observationCount: rec.observationCount,
+      marketMedian: rec.marketMedian ? Number(rec.marketMedian) : null,
+      marketMin: rec.marketMin ? Number(rec.marketMin) : null,
+      marketMax: rec.marketMax ? Number(rec.marketMax) : null,
+      evidenceUpdatedAt: rec.evidenceUpdatedAt,
       updatedAt: rec.updatedAt,
       variant: {
         id: variant.id,
@@ -68,6 +75,10 @@ export default async function PricingPage() {
     };
   });
 
+  // Load recent LEGO market research history
+  const { MarketResearchService } = await import("@/services/pricing/marketResearchService");
+  const recentResearches = await MarketResearchService.getRecentResearches(6);
+
   return (
     <main className="flex-1 p-8 overflow-y-auto bg-slate-950 text-white">
       {/* Title Header */}
@@ -82,6 +93,7 @@ export default async function PricingPage() {
 
       <PricingManager
         initialRecommendations={mappedRecommendations}
+        initialRecentResearches={recentResearches}
         userRole={user.role}
       />
     </main>

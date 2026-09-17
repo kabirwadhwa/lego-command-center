@@ -380,12 +380,44 @@ model MarketPriceSnapshot {
 
 // Suggested pricing modifications
 model PriceRecommendation {
-  id               String         @id @default(uuid())
-  productVariantId String
-  productVariant   ProductVariant @relation(fields: [productVariantId], references: [id], onDelete: Restrict)
-  recommendedPrice Decimal        @db.Decimal(12, 2)
-  reasoning        String
-  updatedAt        DateTime       @default(now())
+  id                String         @id @default(uuid())
+  productVariantId  String
+  productVariant    ProductVariant @relation(fields: [productVariantId], references: [id], onDelete: Restrict)
+  recommendedPrice  Decimal        @db.Decimal(12, 2)
+  reasoning         String
+  confidenceScore   Int?
+  confidenceTier    String?        // "HIGH" | "MEDIUM" | "LOW" | "INSUFFICIENT"
+  observationCount  Int?           @default(0)
+  marketMedian      Decimal?       @db.Decimal(12, 2)
+  marketMin         Decimal?       @db.Decimal(12, 2)
+  marketMax         Decimal?       @db.Decimal(12, 2)
+  evidenceUpdatedAt DateTime?
+  updatedAt         DateTime       @default(now())
+}
+
+// User-initiated market research session history
+model LegoResearchHistory {
+  id               String    @id @default(uuid())
+  setNumber        String
+  productName      String
+  theme            String?
+  imageUrl         String?
+  recommendedPrice Decimal?  @db.Decimal(12, 2)
+  marketMedian     Decimal?  @db.Decimal(12, 2)
+  marketMin        Decimal?  @db.Decimal(12, 2)
+  marketMax        Decimal?  @db.Decimal(12, 2)
+  observationCount Int       @default(0)
+  confidenceScore  Int?
+  confidenceTier   String?
+  targetChannel    String?
+  hypotheticalCost Decimal?  @db.Decimal(12, 2)
+  potentialMargin  Decimal?  @db.Decimal(12, 2)
+  potentialProfit  Decimal?  @db.Decimal(12, 2)
+  status           String    @default("SUCCESS") // "SUCCESS" | "INSUFFICIENT_DATA" | "NO_DATA" | "EXTERNAL_SOURCE_FAILURE"
+  researchedAt     DateTime  @default(now())
+
+  @@index([setNumber])
+  @@index([researchedAt])
 }
 
 // Job Runner tracking

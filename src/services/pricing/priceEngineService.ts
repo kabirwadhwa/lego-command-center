@@ -1,70 +1,21 @@
 import prisma from "@/lib/prisma";
-import { AlertSeverity, AlertType, ObservationProvenance, PriceType } from "@prisma/client";
+import { AlertSeverity, AlertType, ObservationProvenance, PriceType, Prisma } from "@prisma/client";
 import { CatawikiScraperService } from "../scraper/catawikiScraper";
 import { getAppMode } from "@/lib/auth";
+import {
+  MARKETPLACE_FEES,
+  MarketplaceFeeStructure,
+  calculateBreakevenFloor,
+  getFeeStructure
+} from "./feeService";
 
 export type ConfidenceTier = "INSUFFICIENT" | "LOW" | "MEDIUM" | "HIGH";
-
-export interface MarketplaceFeeStructure {
-  channel: string;
-  variableFeePct: number; // e.g. 0.15 for 15%
-  fixedFee: number;       // e.g. 0.30 EUR
-  estimatedShipping: number; // e.g. 6.50 EUR
-}
-
-export const MARKETPLACE_FEES: Record<string, MarketplaceFeeStructure> = {
-  SHOPIFY: {
-    channel: "SHOPIFY",
-    variableFeePct: 0.029, // 2.9% transaction & payment processing
-    fixedFee: 0.30,
-    estimatedShipping: 0.00, // typically paid by customer
-  },
-  BOL: {
-    channel: "BOL",
-    variableFeePct: 0.15, // 15% category commission
-    fixedFee: 0.00,
-    estimatedShipping: 6.50,
-  },
-  CATAWIKI: {
-    channel: "CATAWIKI",
-    variableFeePct: 0.125, // 12.5% seller commission
-    fixedFee: 0.00,
-    estimatedShipping: 0.00, // paid by buyer
-  },
-  EBAY: {
-    channel: "EBAY",
-    variableFeePct: 0.1325, // 13.25% final value fee
-    fixedFee: 0.35,
-    estimatedShipping: 6.50,
-  },
-  BRICKLINK: {
-    channel: "BRICKLINK",
-    variableFeePct: 0.059, // 3% sales commission + 2.9% payment processing
-    fixedFee: 0.30,
-    estimatedShipping: 0.00,
-  },
-  DEFAULT: {
-    channel: "DEFAULT",
-    variableFeePct: 0.15, // 15% blended platform fee
-    fixedFee: 0.30,
-    estimatedShipping: 0.00,
-  },
+export {
+  MARKETPLACE_FEES,
+  type MarketplaceFeeStructure,
+  calculateBreakevenFloor,
+  getFeeStructure
 };
-
-/**
- * Calculates deterministic breakeven floor:
- * breakevenFloor = (cost + paymentFixedFee + shipping) / (1 - fees)
- */
-export function calculateBreakevenFloor(
-  cost: number | null,
-  feeStructure: MarketplaceFeeStructure = MARKETPLACE_FEES.DEFAULT
-): number | null {
-  if (cost === null || cost <= 0) return null;
-  const netRequired = cost + feeStructure.fixedFee + feeStructure.estimatedShipping;
-  const divisor = 1 - feeStructure.variableFeePct;
-  if (divisor <= 0) return null;
-  return Math.round((netRequired / divisor) * 100) / 100;
-}
 
 export interface PricingMetrics {
   sampleSize: number;
@@ -245,18 +196,31 @@ export class PriceEngineService {
     if (datePenalized) {
       totalScore -= 10;
     }
-    const confidenceScore = Math.max(0, Math.min(100, Math.round(totalScore)));
+    const rawScore = Math.max(0, Math.min(100, Math.round(totalScore)));
 
-    // Map to confidence tiers
+    // Map to confidence tiers strictly honoring sample size caps and cap score accordingly
+    let confidenceScore = rawScore;
     let confidenceTier: ConfidenceTier = "INSUFFICIENT";
-    if (rawCount < 2 || confidenceScore < 35) {
+    if (rawCount < 2) {
+      confidenceScore = 0;
       confidenceTier = "INSUFFICIENT";
-    } else if (confidenceScore < 60) {
-      confidenceTier = "LOW";
-    } else if (confidenceScore < 80) {
-      confidenceTier = "MEDIUM";
+    } else if (rawCount <= 4) {
+      // Rule: 2-4 observations: LOW maximum (capped at 40 max)
+      confidenceScore = Math.min(rawScore, 40);
+      confidenceTier = confidenceScore >= 20 ? "LOW" : "INSUFFICIENT";
+    } else if (rawCount < 8) {
+      // Rule: 5-7 observations: eligible for MEDIUM, capped below HIGH (max 75)
+      confidenceScore = Math.min(rawScore, 75);
+      confidenceTier = confidenceScore >= 45 ? "MEDIUM" : "LOW";
     } else {
-      confidenceTier = "HIGH";
+      // Rule: 8+ observations: eligible for HIGH
+      if (confidenceScore >= 80) {
+        confidenceTier = "HIGH";
+      } else if (confidenceScore >= 50) {
+        confidenceTier = "MEDIUM";
+      } else {
+        confidenceTier = "LOW";
+      }
     }
 
     return {
@@ -502,6 +466,13 @@ export class PriceEngineService {
           data: {
             recommendedPrice,
             reasoning,
+            confidenceScore: metrics.confidenceScore,
+            confidenceTier: metrics.confidenceTier,
+            observationCount: metrics.rawCount,
+            marketMedian: new Prisma.Decimal(metrics.median),
+            marketMin: new Prisma.Decimal(metrics.min),
+            marketMax: new Prisma.Decimal(metrics.max),
+            evidenceUpdatedAt: new Date(),
             updatedAt: new Date()
           }
         });
@@ -510,7 +481,14 @@ export class PriceEngineService {
           data: {
             productVariantId: variant.id,
             recommendedPrice,
-            reasoning
+            reasoning,
+            confidenceScore: metrics.confidenceScore,
+            confidenceTier: metrics.confidenceTier,
+            observationCount: metrics.rawCount,
+            marketMedian: new Prisma.Decimal(metrics.median),
+            marketMin: new Prisma.Decimal(metrics.min),
+            marketMax: new Prisma.Decimal(metrics.max),
+            evidenceUpdatedAt: new Date(),
           }
         });
       }

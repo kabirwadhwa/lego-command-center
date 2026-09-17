@@ -645,4 +645,202 @@ export async function refreshMarketPricesAction(setNumber: string) {
   }
 }
 
+/**
+ * Researches the market price of ANY LEGO set number manually.
+ * Separated strictly from inventory ownership (does not create stock or balances).
+ */
+export async function researchLegoSetAction(params: {
+  setNumber: string;
+  hypotheticalCost?: number | null;
+  targetChannel?: string;
+  forceRefresh?: boolean;
+  userProductName?: string;
+  userTheme?: string;
+}) {
+  try {
+    const { getCurrentUser } = await import("@/lib/auth");
+    const user = await getCurrentUser();
+    if (!user) {
+      return { success: false as const, error: "Unauthorized: Please log in to perform market research." };
+    }
+
+    const { MarketResearchService } = await import("@/services/pricing/marketResearchService");
+    const normalized = MarketResearchService.normalizeSetNumber(params.setNumber);
+    if (!MarketResearchService.isValidSetNumber(normalized)) {
+      return {
+        success: false as const,
+        error: "Invalid LEGO set number. Please enter a valid 3 to 7 digit set number (e.g. 10316).",
+      };
+    }
+
+    // Force-refreshing external market scrapers requires ADMIN or FAMILY_SELLER
+    const canRefresh = user.role === UserRole.ADMIN || user.role === UserRole.FAMILY_SELLER;
+    const forceRefresh = params.forceRefresh && canRefresh ? true : false;
+
+    const result = await MarketResearchService.researchLegoSet({
+      ...params,
+      setNumber: normalized,
+      forceRefresh
+    });
+
+    return { success: true as const, data: result };
+  } catch (err) {
+    console.error("Research LEGO set action failed:", err);
+    const errorMsg = err instanceof Error ? err.message : "Market research failed.";
+    return { success: false as const, error: errorMsg };
+  }
+}
+
+/**
+ * Retrieves recent LEGO set market research sessions.
+ */
+export async function getRecentResearchAction(limit: number = 6) {
+  try {
+    const { MarketResearchService } = await import("@/services/pricing/marketResearchService");
+    const data = await MarketResearchService.getRecentResearches(limit);
+    return { success: true as const, data };
+  } catch (err) {
+    console.error("Get recent research action failed:", err);
+    return { success: false as const, error: "Failed to load recent research history.", data: [] };
+  }
+}
+
+/**
+ * Adds a researched LEGO set directly to real inventory using the ledger.
+ * RBAC: ADMIN or FAMILY_SELLER only.
+ */
+export async function addResearchedSetToInventoryAction(params: {
+  setNumber: string;
+  sku: string;
+  condition: ProductCondition;
+  quantity: number;
+  unitCost?: number | null;
+  storageLocation?: string;
+  notes?: string;
+  supplier?: string;
+  productName?: string;
+  theme?: string;
+}) {
+  try {
+    const user = await checkRole([UserRole.ADMIN, UserRole.FAMILY_SELLER]);
+    const { InventoryService } = await import("@/services/inventoryService");
+    const result = await InventoryService.intakeStock({
+      actorId: user.id,
+      actorName: user.name,
+      setNumber: params.setNumber,
+      sku: params.sku,
+      condition: params.condition,
+      quantity: params.quantity,
+      unitCost: params.unitCost,
+      productName: params.productName,
+      theme: params.theme,
+      storageLocation: params.storageLocation,
+      notes: params.notes,
+      supplier: params.supplier,
+    });
+
+    // Evaluate pricing for the new inventory variant
+    try {
+      const { PriceEngineService } = await import("@/services/pricing/priceEngineService");
+      await PriceEngineService.evaluateVariant(result.variant.id);
+    } catch (pricingErr) {
+      console.warn("Pricing evaluation after intake warning:", pricingErr);
+    }
+
+    revalidatePath("/pricing");
+    revalidatePath("/inventory");
+    revalidatePath("/analytics");
+    revalidatePath("/");
+
+    return {
+      success: true as const,
+      data: {
+        productId: result.product.id,
+        variantId: result.variant.id,
+        sku: result.variant.sku,
+        quantity: result.balance.quantity,
+        costBasisStatus: result.costBasisStatus,
+      },
+    };
+  } catch (err) {
+    console.error("Add researched set to inventory failed:", err);
+    const errorMsg = err instanceof Error ? err.message : "Failed to add set to inventory.";
+    return { success: false as const, error: errorMsg };
+  }
+}
+
+/**
+ * Direct manual stock intake (+ Add LEGO / Stock) without prior research.
+ * RBAC: ADMIN or FAMILY_SELLER only.
+ */
+export async function addManualLegoStockAction(params: {
+  setNumber: string;
+  sku: string;
+  condition: ProductCondition;
+  quantity: number;
+  unitCost?: number | null;
+  productName?: string;
+  theme?: string;
+  storageLocation?: string;
+  supplier?: string;
+  notes?: string;
+}) {
+  try {
+    const user = await checkRole([UserRole.ADMIN, UserRole.FAMILY_SELLER]);
+    const { InventoryService } = await import("@/services/inventoryService");
+    const intakeResult = await InventoryService.intakeStock({
+      actorId: user.id,
+      actorName: user.name,
+      setNumber: params.setNumber,
+      sku: params.sku,
+      condition: params.condition,
+      quantity: params.quantity,
+      unitCost: params.unitCost,
+      productName: params.productName,
+      theme: params.theme,
+      storageLocation: params.storageLocation,
+      supplier: params.supplier,
+      notes: params.notes,
+    });
+
+    // Automatically trigger market research and pricing engine sweep for the new item
+    let researchData = null;
+    try {
+      const { MarketResearchService } = await import("@/services/pricing/marketResearchService");
+      researchData = await MarketResearchService.researchLegoSet({
+        setNumber: params.setNumber,
+        hypotheticalCost: params.unitCost,
+        forceRefresh: false,
+        userProductName: params.productName,
+        userTheme: params.theme,
+      });
+
+      const { PriceEngineService } = await import("@/services/pricing/priceEngineService");
+      await PriceEngineService.evaluateVariant(intakeResult.variant.id);
+    } catch (auxErr) {
+      console.warn("Post-intake research or pricing warning:", auxErr);
+    }
+
+    revalidatePath("/pricing");
+    revalidatePath("/inventory");
+    revalidatePath("/analytics");
+    revalidatePath("/");
+
+    return {
+      success: true as const,
+      data: {
+        product: intakeResult.product,
+        variant: intakeResult.variant,
+        balance: intakeResult.balance,
+        research: researchData,
+      },
+    };
+  } catch (err) {
+    console.error("Add manual stock action failed:", err);
+    const errorMsg = err instanceof Error ? err.message : "Failed to record manual LEGO stock.";
+    return { success: false as const, error: errorMsg };
+  }
+}
+
+
 

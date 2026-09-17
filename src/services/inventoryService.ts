@@ -5,6 +5,9 @@ import {
   MarketplaceType,
   Prisma,
   InventoryBalance,
+  ProductCondition,
+  ProductVariant,
+  InventoryTransaction,
 } from "@prisma/client";
 
 // Custom typed domain errors
@@ -641,6 +644,230 @@ export class InventoryService {
       });
 
       return { success: true };
+    });
+  }
+
+  /**
+   * Intakes stock into the double-entry inventory ledger with atomic consistency.
+   * Reuses Product, checks SKU collisions, updates or creates InventoryBalance,
+   * enforces unknown-cost non-dilution, and logs immutable InventoryTransaction.
+   */
+  static async intakeStock(params: {
+    actorId: string;
+    actorName: string;
+    setNumber: string;
+    sku: string;
+    condition?: ProductCondition;
+    quantity: number;
+    unitCost?: number | null;
+    productName?: string;
+    theme?: string;
+    storageLocation?: string;
+    supplier?: string;
+    notes?: string;
+    inventoryAccountId?: string;
+  }) {
+    const {
+      actorId,
+      actorName,
+      setNumber,
+      sku,
+      condition = ProductCondition.NEW_SEALED,
+      quantity,
+      unitCost,
+      productName,
+      theme,
+      storageLocation,
+      supplier,
+      notes,
+      inventoryAccountId,
+    } = params;
+
+    if (!quantity || !Number.isInteger(quantity) || quantity <= 0) {
+      throw new DomainError("VALIDATION_ERROR", "Intake quantity must be a positive integer.");
+    }
+    if (!sku || sku.trim().length === 0) {
+      throw new DomainError("VALIDATION_ERROR", "SKU is required.");
+    }
+    if (!setNumber || setNumber.trim().length === 0) {
+      throw new DomainError("VALIDATION_ERROR", "Set number is required.");
+    }
+
+    const cleanSku = sku.trim().toUpperCase();
+    const cleanSetNumber = setNumber.trim().toUpperCase();
+
+    return await prisma.$transaction(async (tx) => {
+      // 1. Resolve or create Product entity
+      let product = await tx.product.findUnique({
+        where: { setNumber: cleanSetNumber },
+      });
+
+      if (!product) {
+        product = await tx.product.create({
+          data: {
+            setNumber: cleanSetNumber,
+            name: productName?.trim() || `LEGO Set ${cleanSetNumber}`,
+            theme: theme?.trim() || "General",
+            status: "ACTIVE",
+          },
+        });
+      }
+
+      // 2. Check SKU collision and resolve ProductVariant
+      const existingVariant = await tx.productVariant.findUnique({
+        where: { sku: cleanSku },
+      });
+
+      let variant: ProductVariant;
+      if (existingVariant) {
+        if (existingVariant.productId !== product.id) {
+          throw new DomainError(
+            "DUPLICATE_SKU",
+            `SKU "${cleanSku}" is already assigned to a different product (variant ID: ${existingVariant.id}).`
+          );
+        }
+        if (condition && existingVariant.condition !== condition) {
+          throw new DomainError(
+            "DUPLICATE_SKU",
+            `SKU "${cleanSku}" already exists with condition ${existingVariant.condition}. Use a separate SKU for ${condition}.`
+          );
+        }
+        variant = existingVariant;
+      } else {
+        variant = await tx.productVariant.create({
+          data: {
+            productId: product.id,
+            sku: cleanSku,
+            condition,
+            storageLocation: storageLocation?.trim() || null,
+            notes: notes?.trim() || null,
+            status: "ACTIVE",
+          },
+        });
+      }
+
+      // 3. Resolve target inventory account (default: COMPANY)
+      let accountId = inventoryAccountId;
+      if (!accountId) {
+        const companyAcc = await tx.inventoryAccount.findFirst({
+          where: { type: "COMPANY", status: "ACTIVE" },
+        });
+        if (!companyAcc) {
+          throw new DomainError("ACCOUNT_NOT_FOUND", "Default company inventory account not found.");
+        }
+        accountId = companyAcc.id;
+      }
+
+      // 4. Lock balance row FOR UPDATE
+      const balances = await tx.$queryRaw<InventoryBalance[]>`
+        SELECT * FROM "InventoryBalance"
+        WHERE "productVariantId" = ${variant.id}
+          AND "inventoryAccountId" = ${accountId}
+        LIMIT 1 FOR UPDATE
+      `;
+
+      const existingBalance = balances[0];
+      const curQty = existingBalance?.quantity ?? 0;
+      const curKnownQty = existingBalance?.knownCostQuantity ?? 0;
+      const curKnownTotal = existingBalance && existingBalance.knownCostTotal !== null
+        ? Number(existingBalance.knownCostTotal)
+        : 0;
+
+      const hasKnownCost = unitCost !== undefined && unitCost !== null && unitCost > 0;
+      const newQty = curQty + quantity;
+      let newKnownQty = curKnownQty;
+      let newKnownTotal = curKnownTotal;
+
+      if (hasKnownCost) {
+        newKnownQty = curKnownQty + quantity;
+        newKnownTotal = curKnownTotal + (quantity * unitCost!);
+      }
+
+      const newAvgCost = newKnownQty > 0 ? newKnownTotal / newKnownQty : null;
+
+      let balance: InventoryBalance;
+      if (existingBalance) {
+        balance = await tx.inventoryBalance.update({
+          where: { id: existingBalance.id },
+          data: {
+            quantity: newQty,
+            knownCostQuantity: newKnownQty,
+            knownCostTotal: new Prisma.Decimal(newKnownTotal),
+            averageCost: newAvgCost !== null ? new Prisma.Decimal(newAvgCost) : null,
+            lastUpdated: new Date(),
+          },
+        });
+      } else {
+        balance = await tx.inventoryBalance.create({
+          data: {
+            productVariantId: variant.id,
+            inventoryAccountId: accountId,
+            quantity: newQty,
+            knownCostQuantity: newKnownQty,
+            knownCostTotal: new Prisma.Decimal(newKnownTotal),
+            averageCost: newAvgCost !== null ? new Prisma.Decimal(newAvgCost) : null,
+          },
+        });
+      }
+
+      // 5. Commercial purchase record if supplier provided
+      if (supplier && supplier.trim().length > 0) {
+        const purchase = await tx.purchase.create({
+          data: {
+            supplier: supplier.trim(),
+            purchaseDate: new Date(),
+            status: "RECEIVED",
+            totalCost: hasKnownCost ? new Prisma.Decimal(quantity * unitCost!) : new Prisma.Decimal(0),
+            notes: notes || `Direct stock intake for ${cleanSku}`,
+          },
+        });
+
+        await tx.purchaseItem.create({
+          data: {
+            purchaseId: purchase.id,
+            productVariantId: variant.id,
+            inventoryAccountId: accountId,
+            quantity,
+            unitCost: hasKnownCost ? new Prisma.Decimal(unitCost!) : new Prisma.Decimal(0),
+          },
+        });
+      }
+
+      // 6. Double-entry ledger immutable transaction
+      const transaction: InventoryTransaction = await tx.inventoryTransaction.create({
+        data: {
+          productVariantId: variant.id,
+          inventoryAccountId: accountId,
+          type: InventoryTransactionType.PURCHASE,
+          quantity,
+          unitCost: hasKnownCost ? new Prisma.Decimal(unitCost!) : null,
+          actorType: ActorType.USER,
+          actorId,
+          actorName,
+          notes: notes || (hasKnownCost ? `Stock intake @ €${unitCost!.toFixed(2)}` : "Stock intake with unknown cost basis"),
+        },
+      });
+
+      // 7. Audit log
+      await tx.auditLog.create({
+        data: {
+          actorType: ActorType.USER,
+          actorId,
+          actorName,
+          action: "INTAKE_STOCK",
+          details: `Added ${quantity} units of ${cleanSku} (Set ${cleanSetNumber}) to inventory. Cost: ${hasKnownCost ? `€${unitCost!.toFixed(2)}/unit` : "Unknown"}.`,
+        },
+      });
+
+      const costBasisStatus = this.getCostBasisStatus(balance);
+
+      return {
+        product,
+        variant,
+        balance,
+        transaction,
+        costBasisStatus: costBasisStatus.status,
+      };
     });
   }
 

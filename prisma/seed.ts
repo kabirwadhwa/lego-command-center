@@ -426,6 +426,13 @@ interface DemoVariant {
             productVariantId: variant.id,
             recommendedPrice: suggested,
             reasoning: `Median competitor is €${retailPrice.toFixed(2)}. Lowest shop listing is €${lowestCompetitor.toFixed(2)}. Setting your price to €${suggested.toFixed(2)} places you approximately 0.2% below competitors while retaining a ${estimatedMargin.toFixed(0)}% margin.`,
+            confidenceScore: 70,
+            confidenceTier: "MEDIUM",
+            observationCount: 3,
+            marketMedian: retailPrice,
+            marketMin: retailPrice - 5.00,
+            marketMax: retailPrice + 5.00,
+            evidenceUpdatedAt: new Date(),
           },
         });
 

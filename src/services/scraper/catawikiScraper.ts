@@ -364,26 +364,23 @@ export class CatawikiScraperService {
       const allRawItems: RawApifyLotItem[] = [];
 
       // Step 1: Dynamic Discovery of Completed Lots via Google Search Scraper
-      const discoveryQueries = [
-        `site:catawiki.com "${cleanId}" ("Final bid" OR "Puja final" OR "Winnend bod" OR "Dernière offre" OR "Höchstgebot" OR "Sold" OR "Vendido" OR "Verkocht")`,
-        `site:catawiki.com/en/l/ "${cleanId}"`,
-      ];
-      telemetry.discoveryQueries = discoveryQueries;
-      console.log(`[CatawikiScraper] Step 1: Dynamic discovery via Google for ${cleanId}: queries=[${discoveryQueries.join(" | ")}]`);
+      const primaryQuery = `site:catawiki.com "${cleanId}" ("Final bid" OR "Puja final" OR "Winnend bod" OR "Dernière offre" OR "Höchstgebot" OR "Sold" OR "Vendido")`;
+      telemetry.discoveryQueries = [primaryQuery];
+      console.log(`[CatawikiScraper] Step 1: Dynamic discovery via Google for ${cleanId}: query="${primaryQuery}"`);
 
       const candidateLotUrls: string[] = [];
       const uniqueLotIds = new Set<string>();
 
       try {
         const googleRes = await fetch(
-          `https://api.apify.com/v2/acts/apify~google-search-scraper/run-sync-get-dataset-items?token=${apifyToken}&timeout=45`,
+          `https://api.apify.com/v2/acts/apify~google-search-scraper/run-sync-get-dataset-items?token=${apifyToken}&timeout=60`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              queries: discoveryQueries.join("\n"),
+              queries: primaryQuery,
               maxPagesPerQuery: 1,
-              resultsPerPage: 20,
+              resultsPerPage: 15,
             }),
           }
         );

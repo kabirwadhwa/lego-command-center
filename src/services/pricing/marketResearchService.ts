@@ -1,19 +1,24 @@
 import prisma from "@/lib/prisma";
 import { ObservationProvenance, PriceType, Prisma } from "@prisma/client";
-import { CatawikiScraperService, CatawikiScrapedLot } from "../scraper/catawikiScraper";
+import {
+  ProductIdentificationService,
+  ResolvedLegoProduct,
+} from "@/services/catalog/productIdentificationService";
+import {
+  MultiSourceProviderOrchestrator,
+} from "./providers/providerOrchestrator";
+import { ProviderResult } from "./providers/types";
 import { PriceEngineService, ConfidenceTier } from "./priceEngineService";
 import {
   getFeeStructure,
   calculateBreakevenFloor,
-  calculateChannelProceeds
+  calculateChannelProceeds,
 } from "./feeService";
 import {
   isEligibleForRealMarketPricing,
   GENUINE_PROVENANCES,
-  isGenuineListingUrl
+  isGenuineListingUrl,
 } from "./evidenceEligibility";
-import fs from "fs";
-import path from "path";
 
 export interface PricingResearchObservation {
   id: string;
@@ -28,6 +33,8 @@ export interface PricingResearchObservation {
   seller?: string | null;
   externalUrl?: string | null;
   availability?: boolean;
+  color?: string | null;
+  productMatchScore?: number;
 }
 
 export interface PurchaseScenario {
@@ -57,6 +64,9 @@ export interface PricingResearchResult {
   imageUrl?: string | null;
   ean?: string | null;
   metadataAvailable: boolean;
+  resolvedProduct?: ResolvedLegoProduct;
+  providerStatuses: ProviderResult[];
+  evidenceByColor?: Record<string, PricingResearchObservation[]>;
   observationCount: number;
   soldObservationCount: number;
   askingObservationCount: number;
@@ -80,31 +90,6 @@ export interface PricingResearchResult {
   message?: string;
 }
 
-// In-memory cache for local inventory-seed catalog
-let catalogCache: Map<string, { setName: string }> | null = null;
-
-function getCatalogCache(): Map<string, { setName: string }> {
-  if (catalogCache) return catalogCache;
-  catalogCache = new Map();
-  try {
-    const seedPath = path.join(process.cwd(), "prisma", "inventory-seed.json");
-    if (fs.existsSync(seedPath)) {
-      const raw = fs.readFileSync(seedPath, "utf-8");
-      const list = JSON.parse(raw);
-      if (Array.isArray(list)) {
-        for (const item of list) {
-          if (item.setNumber && item.setName && !catalogCache.has(item.setNumber)) {
-            catalogCache.set(String(item.setNumber), { setName: item.setName });
-          }
-        }
-      }
-    }
-  } catch (err) {
-    console.warn("[MarketResearchService] Could not load inventory-seed catalog:", err);
-  }
-  return catalogCache;
-}
-
 export class MarketResearchService {
   /**
    * Normalizes LEGO set number input.
@@ -112,29 +97,23 @@ export class MarketResearchService {
    * and verifies character validity.
    */
   static normalizeSetNumber(input: string): string {
-    if (!input) return "";
-    let normalized = input.trim();
-    // Strip common prefixes like "SET-", "SET ", "LEGO-", "LEGO ", "LGO-", "LGO "
-    normalized = normalized.replace(/^(?:LEGO|SET|LGO)[-_\s]+/i, "");
-    // Strip trailing "-1" or "-2"
-    normalized = normalized.replace(/-[0-9]+$/, "");
-    return normalized.toUpperCase().trim();
+    return ProductIdentificationService.normalizeIdentifier(input).toUpperCase();
   }
 
   /**
-   * Validates format of LEGO set numbers (usually 3 to 7 digits, or special prefixes).
+   * Validates format of LEGO set/product numbers.
    */
   static isValidSetNumber(setNumber: string): boolean {
-    if (!setNumber || setNumber.length < 3 || setNumber.length > 10) return false;
-    return /^[0-9A-Z-]+$/i.test(setNumber);
+    if (!setNumber || setNumber.length < 3 || setNumber.length > 20) return false;
+    return /^[0-9A-Z-_.]+$/i.test(setNumber);
   }
 
   /**
-   * Resolves LEGO set metadata without fabricating information.
-   * Checks Product database first, then local catalog seed.
+   * Resolves LEGO product metadata without fabricating information.
+   * Uses the comprehensive ProductIdentificationService.
    */
   static async resolveProductMetadata(
-    setNumber: string,
+    identifier: string,
     userProvidedName?: string,
     userProvidedTheme?: string
   ): Promise<{
@@ -145,58 +124,28 @@ export class MarketResearchService {
     imageUrl: string | null;
     ean: string | null;
     metadataAvailable: boolean;
+    resolvedProduct: ResolvedLegoProduct;
   }> {
-    // 1. Search existing Product table
-    const existing = await prisma.product.findUnique({
-      where: { setNumber }
-    });
+    const resolved = await ProductIdentificationService.resolveProduct(identifier);
 
-    if (existing) {
-      return {
-        id: existing.id,
-        setNumber: existing.setNumber,
-        name: existing.name,
-        theme: existing.theme || null,
-        imageUrl: existing.imageUrl || null,
-        ean: existing.ean || null,
-        metadataAvailable: true
-      };
+    // Apply user overrides if provided
+    if (userProvidedName && userProvidedName.trim()) {
+      resolved.name = userProvidedName.trim();
+    }
+    if (userProvidedTheme && userProvidedTheme.trim()) {
+      resolved.theme = userProvidedTheme.trim();
     }
 
-    // 2. Check local catalog seed
-    const catalog = getCatalogCache();
-    const seedInfo = catalog.get(setNumber);
-    if (seedInfo) {
-      return {
-        setNumber,
-        name: seedInfo.setName,
-        theme: userProvidedTheme || "Icons / General",
-        imageUrl: null,
-        ean: null,
-        metadataAvailable: true
-      };
-    }
+    const metadataAvailable = resolved.name !== null && resolved.identifierType !== "UNKNOWN";
 
-    // 3. User entered custom name
-    if (userProvidedName && userProvidedName.trim().length > 0) {
-      return {
-        setNumber,
-        name: userProvidedName.trim(),
-        theme: userProvidedTheme ? userProvidedTheme.trim() : null,
-        imageUrl: null,
-        ean: null,
-        metadataAvailable: true
-      };
-    }
-
-    // 4. Metadata unavailable truthfully
     return {
-      setNumber,
-      name: "Product metadata unavailable",
-      theme: null,
-      imageUrl: null,
-      ean: null,
-      metadataAvailable: false
+      setNumber: resolved.canonicalIdentifier || identifier,
+      name: resolved.name || (metadataAvailable ? resolved.name! : "Product metadata unavailable"),
+      theme: resolved.theme || null,
+      imageUrl: resolved.imageUrl || null,
+      ean: resolved.ean || null,
+      metadataAvailable,
+      resolvedProduct: resolved,
     };
   }
 
@@ -210,9 +159,10 @@ export class MarketResearchService {
     theme?: string | null;
     imageUrl?: string | null;
     ean?: string | null;
+    productType?: string;
   }) {
     const existing = await prisma.product.findUnique({
-      where: { setNumber: metadata.setNumber }
+      where: { setNumber: metadata.setNumber },
     });
 
     if (existing) return existing;
@@ -224,34 +174,36 @@ export class MarketResearchService {
         theme: metadata.theme || "General",
         imageUrl: metadata.imageUrl || null,
         ean: metadata.ean || null,
-        status: "ACTIVE"
-      }
+        productType: metadata.productType || "LEGO_SET",
+        status: "ACTIVE",
+      },
     });
   }
 
   /**
-   * Fetches genuine market observations adhering to 6-hour freshness and strict provenance.
-   * Never uses synthetic/simulated observations in production.
+   * Fetches genuine market observations adhering to 6-hour freshness across all providers.
+   * Never uses synthetic/simulated observations in any environment.
    */
   static async getMarketObservations(
     productId: string,
-    setNumber: string,
-    forceRefresh: boolean = false
+    canonicalIdentifier: string,
+    forceRefresh: boolean = false,
+    resolvedProduct?: ResolvedLegoProduct
   ): Promise<{
     observations: PricingResearchObservation[];
+    providerStatuses: ProviderResult[];
     isStale: boolean;
     sourceError?: string;
   }> {
-    // Invariant: strictly genuine provenances across all environments and runtimes
     const allowedProvenances: ObservationProvenance[] = [...GENUINE_PROVENANCES];
 
-    // Check existing stored snapshots
+    // Check existing stored snapshots in DB
     const existingSnapshotsRaw = await prisma.marketPriceSnapshot.findMany({
       where: {
         productId,
-        provenance: { in: allowedProvenances }
+        provenance: { in: allowedProvenances },
       },
-      orderBy: { capturedAt: "desc" }
+      orderBy: { capturedAt: "desc" },
     });
     const existingSnapshots = existingSnapshotsRaw.filter(isEligibleForRealMarketPricing);
 
@@ -265,11 +217,32 @@ export class MarketResearchService {
 
     const isFresh = existingSnapshots.length > 0 && (now - newestCapturedAt) <= SIX_HOURS_MS;
 
+    // Check if we have cached provider status metadata in history
+    let cachedProviderStatuses: ProviderResult[] = [];
+    const latestHistory = await prisma.legoResearchHistory.findFirst({
+      where: { setNumber: canonicalIdentifier },
+      orderBy: { researchedAt: "desc" },
+    });
+
+    if (latestHistory?.resolvedMetadataJson) {
+      try {
+        const meta = JSON.parse(latestHistory.resolvedMetadataJson);
+        if (Array.isArray(meta.providerStatuses)) {
+          cachedProviderStatuses = meta.providerStatuses;
+        }
+      } catch {
+        // ignore parse error
+      }
+    }
+
     // Return cached if fresh and not force-refreshing
     if (existingSnapshots.length > 0 && isFresh && !forceRefresh) {
       return {
         observations: existingSnapshots.map(s => this.mapSnapshotToObservation(s)),
-        isStale: false
+        providerStatuses: cachedProviderStatuses.length > 0
+          ? cachedProviderStatuses
+          : [{ providerId: "cached", providerName: "Cached Evidence", status: "SUCCESS", evidence: [] }],
+        isStale: false,
       };
     }
 
@@ -277,53 +250,60 @@ export class MarketResearchService {
     if (existingSnapshots.length > 0 && !forceRefresh) {
       return {
         observations: existingSnapshots.map(s => this.mapSnapshotToObservation(s)),
-        isStale: true
+        providerStatuses: cachedProviderStatuses.length > 0
+          ? cachedProviderStatuses
+          : [{ providerId: "cached", providerName: "Cached Evidence", status: "SUCCESS", evidence: [] }],
+        isStale: true,
       };
     }
 
-    // Fetch fresh observations from Catawiki scraper
-    let scraperLots: CatawikiScrapedLot[] = [];
-    let sourceError: string | undefined;
+    // Resolve product if not passed
+    const product = resolvedProduct || await ProductIdentificationService.resolveProduct(canonicalIdentifier);
 
-    try {
-      scraperLots = await CatawikiScraperService.fetchMarketObservations(setNumber);
-    } catch (err) {
-      console.error(`[MarketResearchService] Catawiki scraper error:`, err);
-      sourceError = err instanceof Error ? err.message : "Catawiki scraper request failed";
-    }
+    // Multi-source sweep across all providers
+    const orchestrator = new MultiSourceProviderOrchestrator();
+    const multiResult = await orchestrator.searchAllProviders(product, { forceRefresh });
 
     // Invariant: unconditionally filter lots through isEligibleForRealMarketPricing
-    const validLots = scraperLots.filter(isEligibleForRealMarketPricing);
+    const validEvidence = multiResult.combinedEvidence.filter(isEligibleForRealMarketPricing);
 
-    // Save newly scraped valid lots to database
-    for (const lot of validLots) {
+    // Persist newly fetched valid evidence into MarketPriceSnapshot
+    for (const ev of validEvidence) {
+      // Map saleType to PriceType
+      let pType: PriceType = PriceType.ASKING_PRICE;
+      if (ev.saleType === "SOLD") pType = PriceType.SOLD_PRICE;
+      else if (ev.saleType === "AUCTION") pType = PriceType.CURRENT_BID;
+
       const existing = await prisma.marketPriceSnapshot.findFirst({
         where: {
           productId,
-          externalListingId: lot.externalListingId
-        }
+          externalUrl: ev.externalUrl,
+        },
       });
 
       if (!existing) {
         await prisma.marketPriceSnapshot.create({
           data: {
             productId,
-            marketplace: "CATAWIKI",
-            price: new Prisma.Decimal(lot.price),
-            priceType: lot.priceType,
-            currency: lot.currency,
-            shipping: lot.shippingCost !== undefined ? new Prisma.Decimal(lot.shippingCost) : null,
-            condition: lot.condition,
-            seller: lot.seller,
-            externalListingId: lot.externalListingId,
-            externalUrl: lot.externalUrl,
-            auctionEndAt: lot.auctionEndAt,
-            capturedAt: lot.capturedAt,
+            marketplace: ev.marketplace,
+            price: new Prisma.Decimal(ev.price),
+            priceType: pType,
+            currency: ev.currency,
+            shipping: ev.shipping !== null ? new Prisma.Decimal(ev.shipping) : null,
+            condition: ev.condition,
+            seller: ev.seller,
+            externalUrl: ev.externalUrl,
+            capturedAt: ev.observedAt || new Date(),
             availability: true,
-            provenance: lot.provenance,
-            provider: lot.provider || "apify/saswave/catawiki-scraper",
-            rawMetadataJson: lot.rawMetadataJson
-          }
+            provenance: ev.provenance,
+            provider: ev.provider,
+            rawMetadataJson: JSON.stringify({
+              color: ev.color,
+              productMatchScore: ev.productMatchScore,
+              originalPrice: ev.originalPrice,
+              originalCurrency: ev.originalCurrency,
+            }),
+          },
         });
       }
     }
@@ -332,16 +312,16 @@ export class MarketResearchService {
     const allSnapshotsRaw = await prisma.marketPriceSnapshot.findMany({
       where: {
         productId,
-        provenance: { in: allowedProvenances }
+        provenance: { in: allowedProvenances },
       },
-      orderBy: { capturedAt: "desc" }
+      orderBy: { capturedAt: "desc" },
     });
     const allSnapshots = allSnapshotsRaw.filter(isEligibleForRealMarketPricing);
 
     return {
       observations: allSnapshots.map(s => this.mapSnapshotToObservation(s)),
+      providerStatuses: multiResult.providers,
       isStale: false,
-      sourceError: validLots.length === 0 && sourceError ? sourceError : undefined
     };
   }
 
@@ -357,10 +337,24 @@ export class MarketResearchService {
     seller?: string | null;
     externalUrl?: string | null;
     availability: boolean;
+    rawMetadataJson?: string | null;
   }): PricingResearchObservation {
     const rawSeller = snapshot.seller?.trim();
     const seller = (rawSeller && !rawSeller.toLowerCase().includes("simulated")) ? rawSeller : null;
     const url = (snapshot.externalUrl && isGenuineListingUrl(snapshot.externalUrl)) ? snapshot.externalUrl : null;
+
+    let color: string | null = null;
+    let matchScore: number | undefined;
+
+    if (snapshot.rawMetadataJson) {
+      try {
+        const parsed = JSON.parse(snapshot.rawMetadataJson);
+        color = parsed.color || null;
+        matchScore = parsed.productMatchScore;
+      } catch {
+        // ignore
+      }
+    }
 
     return {
       id: snapshot.id,
@@ -374,12 +368,15 @@ export class MarketResearchService {
       provenance: snapshot.provenance,
       seller,
       externalUrl: url,
-      availability: snapshot.availability
+      availability: snapshot.availability,
+      color,
+      productMatchScore: matchScore,
     };
   }
 
   /**
-   * Executes a complete manual market research operation for ANY LEGO set number.
+   * Executes a complete manual market research operation for ANY LEGO identifier.
+   * Researches sets, parts, SKUs, and titles across multiple sources.
    * Does NOT create owned stock, balances, or transactions.
    */
   static async researchLegoSet(params: {
@@ -395,60 +392,46 @@ export class MarketResearchService {
       targetChannel = "CATAWIKI",
       forceRefresh = false,
       userProductName,
-      userTheme
+      userTheme,
     } = params;
 
-    const normalizedSetNumber = this.normalizeSetNumber(params.setNumber);
-    if (!this.isValidSetNumber(normalizedSetNumber)) {
-      return {
-        setNumber: params.setNumber,
-        productName: "Invalid Set Number",
-        metadataAvailable: false,
-        observationCount: 0,
-        soldObservationCount: 0,
-        askingObservationCount: 0,
-        currentBidObservationCount: 0,
-        medianPrice: null,
-        meanPrice: null,
-        minimumObservedPrice: null,
-        maximumObservedPrice: null,
-        confidenceScore: null,
-        confidenceTier: "INSUFFICIENT",
-        recommendedMarketPrice: null,
-        currency: "EUR",
-        latestObservationAt: null,
-        sources: [],
-        observations: [],
-        status: "NO_DATA",
-        targetChannel,
-        researchTimestamp: new Date(),
-        message: "Invalid LEGO set number. Please enter a valid 3 to 7 digit set number (e.g. 10316)."
-      };
-    }
-
-    // 1. Resolve product metadata
+    // 1. Identify product accurately
     const metadata = await this.resolveProductMetadata(
-      normalizedSetNumber,
+      params.setNumber,
       userProductName,
       userTheme
     );
+    const resolved = metadata.resolvedProduct;
+    const canonicalId = resolved.canonicalIdentifier || params.setNumber.trim();
 
     // 2. Ensure a catalog Product record exists (zero inventory, no variants created)
     const product = await this.ensureCatalogProduct({
-      setNumber: normalizedSetNumber,
+      setNumber: canonicalId,
       name: metadata.name,
       theme: metadata.theme,
       imageUrl: metadata.imageUrl,
-      ean: metadata.ean
+      ean: metadata.ean,
+      productType: resolved.identifierType,
     });
 
-    // 3. Get market observations
-    const { observations: rawObservations, isStale, sourceError } = await this.getMarketObservations(
+    // 3. Multi-source market observations
+    const { observations: rawObservations, providerStatuses, isStale } = await this.getMarketObservations(
       product.id,
-      normalizedSetNumber,
-      forceRefresh
+      canonicalId,
+      forceRefresh,
+      resolved
     );
     const observations = rawObservations.filter(isEligibleForRealMarketPricing);
+
+    // Group observations by color (for LEGO_PART)
+    const evidenceByColor: Record<string, PricingResearchObservation[]> = {};
+    if (resolved.identifierType === "LEGO_PART") {
+      for (const obs of observations) {
+        const c = obs.color || "Standard / Unspecified";
+        if (!evidenceByColor[c]) evidenceByColor[c] = [];
+        evidenceByColor[c].push(obs);
+      }
+    }
 
     const prices = observations.map(o => o.price);
     const capturedDates = observations.map(o => o.capturedAt);
@@ -463,17 +446,45 @@ export class MarketResearchService {
       ? new Date(Math.max(...observations.map(o => new Date(o.capturedAt).getTime())))
       : null;
 
-    // 4. Calculate statistical metrics
-    const metrics = PriceEngineService.calculateMetrics(prices, capturedDates, priceTypes);
+    // 4. Source Quality Weighting: prioritize sold transactions over asking/auctions
+    let effectivePrices = prices;
+    const soldPrices = observations.filter(o => o.priceType === PriceType.SOLD_PRICE).map(o => o.price);
 
-    // 5. Determine recommended market price
+    // If we have >= 2 sold transactions, base the median heavily on sold prices
+    if (soldPrices.length >= 2) {
+      effectivePrices = soldPrices;
+    }
+
+    // 5. Calculate statistical metrics
+    const metrics = PriceEngineService.calculateMetrics(effectivePrices, capturedDates, priceTypes);
+
+    // Confidence adjustment for source diversity:
+    // If all evidence came from only 1 source or if there are 0 completed sold transactions, cap confidence at MEDIUM
+    let finalConfidenceScore: number | null = metrics.confidenceScore;
+    let finalConfidenceTier = metrics.confidenceTier;
+
+    if (observations.length >= 2) {
+      if (sources.length === 1 && soldCount === 0 && finalConfidenceTier === "HIGH") {
+        finalConfidenceTier = "MEDIUM";
+        finalConfidenceScore = Math.min(finalConfidenceScore, 75);
+      }
+      if (resolved.identifierType === "UNKNOWN") {
+        finalConfidenceTier = "LOW";
+        finalConfidenceScore = Math.min(finalConfidenceScore, 35);
+      }
+    } else {
+      finalConfidenceTier = "INSUFFICIENT";
+      finalConfidenceScore = null;
+    }
+
+    // 6. Determine recommended market price
     // Invariant: strictly requires >= 2 genuine market observations
     let recommendedPrice: number | null = null;
     if (metrics.median > 0 && observations.length >= 2) {
       recommendedPrice = Math.round((metrics.median * 0.99) * 100) / 100;
     }
 
-    // 6. Fee structure and hypothetical scenario
+    // 7. Fee structure and hypothetical scenario
     const feeStructure = getFeeStructure(targetChannel);
     let purchaseScenario: PurchaseScenario | null = null;
 
@@ -492,10 +503,9 @@ export class MarketResearchService {
           potentialProfit: proceeds.contributionProfit,
           potentialMargin: proceeds.grossMarginPct,
           breakevenPrice: proceeds.breakevenPrice,
-          potentialRoi: proceeds.roiPct
+          potentialRoi: proceeds.roiPct,
         };
       } else {
-        // When genuine market observations < 2, never fabricate selling price, profit, margin or ROI
         purchaseScenario = {
           hypotheticalCost,
           targetChannel: feeStructure.channel,
@@ -506,33 +516,36 @@ export class MarketResearchService {
           potentialProfit: null,
           potentialMargin: null,
           breakevenPrice: breakeven,
-          potentialRoi: null
+          potentialRoi: null,
         };
       }
     }
 
-    // 7. Determine status
+    // 8. Determine status
     let status: ResearchStatus = "SUCCESS";
-    let message = "Research complete with live market observations.";
+    let message = `Research complete with ${observations.length} genuine market observations across ${sources.length} sources.`;
+
+    const allConfigured = providerStatuses.filter(p => p.status !== "NOT_CONFIGURED");
 
     if (observations.length === 0) {
-      if (sourceError || !process.env.APIFY_API_TOKEN) {
+      if (allConfigured.length === 0 || (providerStatuses.length > 0 && providerStatuses.every(p => p.status === "NOT_CONFIGURED" || p.status === "FAILED"))) {
         status = "EXTERNAL_SOURCE_FAILURE";
-        message = "Live market evidence unavailable: external price source unconfigured or failed.";
+        message = "Live market evidence unavailable: configured market providers failed or unconfigured.";
       } else {
         status = "NO_DATA";
-        message = `No sufficient live market evidence was found for LEGO Set ${normalizedSetNumber}.`;
+        message = `No genuine market evidence found across searched sources for ${product.name} (${canonicalId}).`;
       }
     } else if (observations.length < 2) {
       status = "INSUFFICIENT_DATA";
-      message = `Insufficient live market observations (${observations.length} found). Minimum 2 required for reliable pricing.`;
+      message = `Insufficient genuine market observations (${observations.length} found). Minimum 2 required for pricing recommendations.`;
     }
 
-    // 8. Persist lightweight research history
+    // 9. Persist lightweight research history
     try {
       await prisma.legoResearchHistory.create({
         data: {
-          setNumber: normalizedSetNumber,
+          setNumber: canonicalId,
+          identifierType: resolved.identifierType,
           productName: product.name,
           theme: product.theme,
           imageUrl: product.imageUrl,
@@ -541,15 +554,24 @@ export class MarketResearchService {
           marketMin: (metrics.min > 0 && observations.length >= 2) ? new Prisma.Decimal(metrics.min) : null,
           marketMax: (metrics.max > 0 && observations.length >= 2) ? new Prisma.Decimal(metrics.max) : null,
           observationCount: observations.length,
-          confidenceScore: (metrics.confidenceScore > 0 && observations.length >= 2) ? metrics.confidenceScore : null,
-          confidenceTier: observations.length < 2 ? "INSUFFICIENT" : metrics.confidenceTier,
+          confidenceScore: finalConfidenceScore,
+          confidenceTier: finalConfidenceTier,
           targetChannel,
           hypotheticalCost: hypotheticalCost ? new Prisma.Decimal(hypotheticalCost) : null,
-          potentialMargin: (purchaseScenario?.potentialMargin !== null && purchaseScenario?.potentialMargin !== undefined) ? new Prisma.Decimal(purchaseScenario.potentialMargin) : null,
-          potentialProfit: (purchaseScenario?.potentialProfit !== null && purchaseScenario?.potentialProfit !== undefined) ? new Prisma.Decimal(purchaseScenario.potentialProfit) : null,
+          potentialMargin: purchaseScenario?.potentialMargin !== null && purchaseScenario?.potentialMargin !== undefined
+            ? new Prisma.Decimal(purchaseScenario.potentialMargin)
+            : null,
+          potentialProfit: purchaseScenario?.potentialProfit !== null && purchaseScenario?.potentialProfit !== undefined
+            ? new Prisma.Decimal(purchaseScenario.potentialProfit)
+            : null,
           status,
-          researchedAt: new Date()
-        }
+          resolvedMetadataJson: JSON.stringify({
+            resolved,
+            providerStatuses,
+            evidenceByColor: Object.keys(evidenceByColor).length > 0 ? evidenceByColor : undefined,
+          }),
+          researchedAt: new Date(),
+        },
       });
     } catch (err) {
       console.warn("[MarketResearchService] Could not persist research history:", err);
@@ -557,12 +579,15 @@ export class MarketResearchService {
 
     return {
       productId: product.id,
-      setNumber: normalizedSetNumber,
+      setNumber: canonicalId,
       productName: product.name,
       theme: product.theme,
       imageUrl: product.imageUrl,
       ean: product.ean,
       metadataAvailable: metadata.metadataAvailable,
+      resolvedProduct: resolved,
+      providerStatuses,
+      evidenceByColor: Object.keys(evidenceByColor).length > 0 ? evidenceByColor : undefined,
       observationCount: observations.length,
       soldObservationCount: soldCount,
       askingObservationCount: askingCount,
@@ -571,8 +596,8 @@ export class MarketResearchService {
       meanPrice: (metrics.mean > 0 && observations.length >= 2) ? metrics.mean : null,
       minimumObservedPrice: (metrics.min > 0 && observations.length >= 2) ? metrics.min : null,
       maximumObservedPrice: (metrics.max > 0 && observations.length >= 2) ? metrics.max : null,
-      confidenceScore: (metrics.confidenceScore > 0 && observations.length >= 2) ? metrics.confidenceScore : null,
-      confidenceTier: observations.length < 2 ? "INSUFFICIENT" : metrics.confidenceTier,
+      confidenceScore: finalConfidenceScore,
+      confidenceTier: finalConfidenceTier,
       recommendedMarketPrice: recommendedPrice,
       currency: "EUR",
       latestObservationAt,
@@ -583,7 +608,7 @@ export class MarketResearchService {
       purchaseScenario,
       isStale,
       researchTimestamp: new Date(),
-      message
+      message,
     };
   }
 
@@ -594,10 +619,9 @@ export class MarketResearchService {
     try {
       const records = await prisma.legoResearchHistory.findMany({
         orderBy: { researchedAt: "desc" },
-        take: limit * 3
+        take: limit * 3,
       });
 
-      // Distinct by setNumber preserving newest
       const seen = new Set<string>();
       const unique = [];
       for (const rec of records) {
@@ -606,6 +630,7 @@ export class MarketResearchService {
           unique.push({
             id: rec.id,
             setNumber: rec.setNumber,
+            identifierType: rec.identifierType || "LEGO_SET",
             productName: rec.productName,
             theme: rec.theme,
             imageUrl: rec.imageUrl,
@@ -617,7 +642,7 @@ export class MarketResearchService {
             targetChannel: rec.targetChannel,
             status: rec.status,
             researchedAt: rec.researchedAt,
-            isStale: Date.now() - new Date(rec.researchedAt).getTime() > 6 * 60 * 60 * 1000
+            isStale: Date.now() - new Date(rec.researchedAt).getTime() > 6 * 60 * 60 * 1000,
           });
           if (unique.length >= limit) break;
         }

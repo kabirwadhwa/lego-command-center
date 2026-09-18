@@ -72,6 +72,31 @@ interface ResearchObservationUI {
   seller?: string | null;
   externalUrl?: string | null;
   availability?: boolean;
+  color?: string | null;
+  productMatchScore?: number;
+}
+
+interface ProviderResultUI {
+  providerId: string;
+  providerName: string;
+  status: "SUCCESS" | "NO_MATCHES" | "NOT_CONFIGURED" | "FAILED";
+  error?: string;
+  queriesAttempted?: string[];
+}
+
+interface ResolvedProductUI {
+  input: string;
+  identifierType: "LEGO_SET" | "LEGO_PART" | "INTERNAL_SKU" | "EAN" | "UNKNOWN";
+  canonicalIdentifier: string;
+  name: string | null;
+  theme: string | null;
+  year: number | null;
+  imageUrl: string | null;
+  ean: string | null;
+  identificationConfidence: number | null;
+  availableColors?: string[];
+  elementIds?: string[];
+  partCategory?: string | null;
 }
 
 interface PurchaseScenarioUI {
@@ -95,6 +120,9 @@ interface ResearchResultUI {
   imageUrl?: string | null;
   ean?: string | null;
   metadataAvailable: boolean;
+  resolvedProduct?: ResolvedProductUI;
+  providerStatuses?: ProviderResultUI[];
+  evidenceByColor?: Record<string, ResearchObservationUI[]>;
   observationCount: number;
   soldObservationCount: number;
   askingObservationCount: number;
@@ -152,6 +180,7 @@ export default function PricingManager({
   const [isResearching, setIsResearching] = useState(false);
   const [researchStatusText, setResearchStatusText] = useState("");
   const [activeResearch, setActiveResearch] = useState<ResearchResultUI | null>(null);
+  const [selectedColorFilter, setSelectedColorFilter] = useState<string | null>(null);
 
   // Add to Inventory Modal (post-research)
   const [showAddModal, setShowAddModal] = useState(false);
@@ -213,12 +242,13 @@ export default function PricingManager({
   const handleResearch = async (forcedSet?: string, forceRefresh: boolean = false) => {
     const setToQuery = forcedSet || researchSetNumber;
     if (!setToQuery || !setToQuery.trim()) {
-      setErrorMsg("Please enter a LEGO Set Number (e.g. 10316).");
+      setErrorMsg("Please enter a LEGO Set Number, Part ID, SKU, or EAN.");
       return;
     }
 
     setIsResearching(true);
-    setResearchStatusText("Researching LEGO set...");
+    setResearchStatusText("Identifying LEGO product...");
+    setSelectedColorFilter(null);
     setErrorMsg(null);
     setSuccessMsg(null);
 
@@ -227,8 +257,8 @@ export default function PricingManager({
       : null;
 
     try {
-      setTimeout(() => setResearchStatusText("Fetching live market evidence from Catawiki..."), 400);
-      setTimeout(() => setResearchStatusText("Analyzing price distributions & fees..."), 900);
+      setTimeout(() => setResearchStatusText("Querying multi-source providers (Catawiki, eBay, BrickLink, Web)..."), 350);
+      setTimeout(() => setResearchStatusText("Verifying candidate evidence & calculating prices..."), 800);
 
       const res = await researchLegoSetAction({
         setNumber: setToQuery.trim(),
@@ -248,7 +278,7 @@ export default function PricingManager({
         setErrorMsg(res.error || "Failed to complete market research.");
       }
     } catch {
-      setErrorMsg("Market research encounter unexpected error.");
+      setErrorMsg("Market research encountered an unexpected error.");
     } finally {
       setIsResearching(false);
       setResearchStatusText("");
@@ -449,8 +479,6 @@ export default function PricingManager({
     }
   };
 
-  const selectedChannelInfo = CHANNELS.find(c => c.id === targetChannel) || CHANNELS[0];
-
   return (
     <div className="space-y-8">
       {/* ========================================================================= */}
@@ -460,10 +488,10 @@ export default function PricingManager({
         <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-slate-800">
           <div>
             <h2 className="text-lg font-bold text-white flex items-center gap-2">
-              <span>🔍</span> Research a LEGO Set
+              <span>🔍</span> Research LEGO Product
             </h2>
             <p className="text-xs text-slate-400 font-medium mt-0.5">
-              Analyze live market pricing, auction spreads, and fees for <strong className="text-slate-300">ANY</strong> LEGO set before purchasing or listing. Does not create inventory.
+              Analyze live multi-source market pricing, auctions, and fees for <strong className="text-slate-300">ANY</strong> LEGO set, part, or element before purchasing or listing. Does not create inventory.
             </p>
           </div>
 
@@ -486,15 +514,15 @@ export default function PricingManager({
           }}
           className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end"
         >
-          {/* Input: Set Number */}
+          {/* Input: Identifier */}
           <div className="space-y-1.5">
             <label htmlFor="setNumber" className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
-              LEGO Set Number <span className="text-rose-400">*</span>
+              LEGO Identifier (Set, Part, SKU, EAN) <span className="text-rose-400">*</span>
             </label>
             <input
               id="setNumber"
               type="text"
-              placeholder="e.g. 10316"
+              placeholder="e.g. 75192, 35106, 3001, LGO-10316"
               value={researchSetNumber}
               onChange={(e) => setResearchSetNumber(e.target.value)}
               className="w-full bg-slate-950 border border-slate-750 focus:border-blue-500 rounded-lg px-3.5 py-2.5 text-sm text-white placeholder-slate-500 outline-none transition-colors"
@@ -548,30 +576,77 @@ export default function PricingManager({
               className="w-full h-[42px] flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 text-white text-xs font-bold rounded-lg shadow-lg transition-all cursor-pointer"
             >
               <span>{isResearching ? "⏳" : "🔍"}</span>
-              <span>{isResearching ? "Researching..." : "Research Price"}</span>
+              <span>{isResearching ? "Searching Sources..." : "Research Product"}</span>
             </button>
           </div>
         </form>
 
-        {/* Integration distinction notice */}
-        <div className="flex flex-wrap items-center justify-between text-[11px] text-slate-400 bg-slate-950/60 p-3 rounded-lg border border-slate-800/80 gap-2">
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-slate-300">Selected Channel:</span>
-            <span className="text-blue-400 font-bold">{selectedChannelInfo.name}</span>
-            <span className="text-slate-500">·</span>
-            <span>{selectedChannelInfo.notes}</span>
+        {/* Multi-Source Provider Status Grid */}
+        <div className="bg-slate-950/70 p-4 rounded-xl border border-slate-800 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-slate-200 uppercase tracking-wider">Multi-Source Intelligence</span>
+              <span className="text-slate-500">·</span>
+              <span className="text-slate-400">Parallel provider queries with strict identity validation</span>
+            </div>
+            <div className="text-[11px] text-slate-400">
+              {activeResearch ? (
+                <span className="font-semibold text-blue-400">
+                  {activeResearch.observationCount} genuine observations across {activeResearch.sources.length} sources
+                </span>
+              ) : (
+                <span>Enter an identifier above to run parallel research</span>
+              )}
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-slate-500">Evidence source:</span>
-            {selectedChannelInfo.hasLiveScraper ? (
-              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                LIVE_SCRAPE (Catawiki)
-              </span>
-            ) : (
-              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-400 border border-slate-700">
-                Fee Economics Model (Scraper Roadmap)
-              </span>
-            )}
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-1">
+            {[
+              { id: "catawiki", name: "Catawiki", defaultStatus: "Apify Scraper" },
+              { id: "ebay", name: "eBay", defaultStatus: "Finding API" },
+              { id: "bricklink", name: "BrickLink", defaultStatus: "Price Guide" },
+              { id: "web_search", name: "Web Search", defaultStatus: "Google / Serp / Brave" },
+            ].map((prov) => {
+              const liveStatus = activeResearch?.providerStatuses?.find(
+                p => p.providerId === prov.id || p.providerName.toLowerCase().includes(prov.id)
+              );
+
+              const status = liveStatus?.status;
+
+              return (
+                <div key={prov.id} className="bg-slate-900/80 border border-slate-800/80 rounded-lg p-2.5 flex items-center justify-between">
+                  <div className="truncate mr-2">
+                    <span className="text-xs font-bold text-slate-200 block truncate">{prov.name}</span>
+                    <span className="text-[10px] text-slate-500 truncate block">
+                      {liveStatus?.error ? "Error: " + liveStatus.error.slice(0, 20) + "..." : prov.defaultStatus}
+                    </span>
+                  </div>
+                  <div>
+                    {status === "SUCCESS" ? (
+                      <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                        SUCCESS ✓
+                      </span>
+                    ) : status === "NO_MATCHES" ? (
+                      <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-slate-800 text-slate-400 border border-slate-700">
+                        NO MATCHES
+                      </span>
+                    ) : status === "NOT_CONFIGURED" ? (
+                      <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                        NOT CONFIGURED
+                      </span>
+                    ) : status === "FAILED" ? (
+                      <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-rose-500/10 text-rose-400 border border-rose-500/30">
+                        FAILED ✕
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-slate-800/60 text-slate-500 border border-slate-700/60">
+                        READY
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -579,7 +654,7 @@ export default function PricingManager({
         {isResearching && (
           <div className="flex items-center gap-3 p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl text-blue-300 text-xs font-medium animate-pulse">
             <div className="w-3.5 h-3.5 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
-            <span>{researchStatusText || "Researching LEGO set..."}</span>
+            <span>{researchStatusText || "Searching parallel LEGO sources..."}</span>
           </div>
         )}
       </section>
@@ -667,9 +742,33 @@ export default function PricingManager({
               )}
               <div className="space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="px-2.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-slate-950 text-blue-400 border border-blue-500/30">
-                    Set {activeResearch.setNumber}
+                  {/* Detected Product Type Badge */}
+                  {activeResearch.resolvedProduct?.identifierType === "LEGO_PART" ? (
+                    <span className="px-2.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-500/15 text-purple-400 border border-purple-500/30">
+                      Detected: LEGO PART
+                    </span>
+                  ) : activeResearch.resolvedProduct?.identifierType === "INTERNAL_SKU" ? (
+                    <span className="px-2.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                      Detected: INTERNAL SKU
+                    </span>
+                  ) : activeResearch.resolvedProduct?.identifierType === "EAN" ? (
+                    <span className="px-2.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-cyan-500/15 text-cyan-400 border border-cyan-500/30">
+                      Detected: EAN BARCODE
+                    </span>
+                  ) : activeResearch.resolvedProduct?.identifierType === "UNKNOWN" ? (
+                    <span className="px-2.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                      Product identity uncertain
+                    </span>
+                  ) : (
+                    <span className="px-2.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-blue-500/15 text-blue-400 border border-blue-500/30">
+                      Detected: LEGO SET
+                    </span>
+                  )}
+
+                  <span className="px-2.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-slate-950 text-slate-300 border border-slate-700">
+                    ID #{activeResearch.resolvedProduct?.canonicalIdentifier || activeResearch.setNumber}
                   </span>
+
                   {activeResearch.theme && (
                     <span className="text-xs text-slate-400 font-medium">
                       {activeResearch.theme}
@@ -783,11 +882,62 @@ export default function PricingManager({
             </div>
           </div>
 
+          {/* Uncertain Identity Warning Banner */}
+          {activeResearch.resolvedProduct?.identifierType === "UNKNOWN" && (
+            <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 text-amber-300 rounded-xl text-xs font-medium flex items-center gap-2">
+              <span>⚠️</span>
+              <span>
+                Product identity uncertain: identifier &quot;{activeResearch.setNumber}&quot; was not found in indexed LEGO set or part catalogs. Pricing calculations are conservative.
+              </span>
+            </div>
+          )}
+
           {/* Insufficient Evidence Warning Banner */}
           {activeResearch.recommendedMarketPrice === null && (
             <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 text-amber-300 rounded-xl text-xs font-medium flex items-center gap-2">
               <span>⚠️</span>
               <span>Recommended price unavailable — insufficient genuine market evidence.</span>
+            </div>
+          )}
+
+          {/* Part Color Variations (if LEGO_PART) */}
+          {activeResearch.resolvedProduct?.identifierType === "LEGO_PART" && (
+            <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                  <span>🎨</span> LEGO Part Colors & Variations
+                </span>
+                <span className="text-[10px] text-slate-500">
+                  Individual LEGO parts have distinct market valuations per color
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setSelectedColorFilter(null)}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    selectedColorFilter === null
+                      ? "bg-purple-600 text-white shadow"
+                      : "bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800"
+                  }`}
+                >
+                  All Colors ({activeResearch.observations.length})
+                </button>
+                {activeResearch.evidenceByColor && Object.entries(activeResearch.evidenceByColor).map(([colorName, colorObs]) => (
+                  <button
+                    key={colorName}
+                    type="button"
+                    onClick={() => setSelectedColorFilter(colorName)}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      selectedColorFilter === colorName
+                        ? "bg-purple-600 text-white shadow"
+                        : "bg-slate-900 hover:bg-slate-800 text-slate-400 border border-slate-800"
+                    }`}
+                  >
+                    {colorName} ({colorObs.length})
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 
@@ -891,77 +1041,94 @@ export default function PricingManager({
               <span className="text-[10px] text-slate-500">Synthetic observations strictly excluded</span>
             </div>
 
-            {activeResearch.observations.length === 0 ? (
-              <div className="p-8 text-center bg-slate-950 rounded-xl border border-slate-800 text-xs text-slate-400">
-                {activeResearch.message || "No genuine market observations found."}
-              </div>
-            ) : (
-              <div className="border border-slate-800 rounded-xl overflow-x-auto bg-slate-950">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-900/90 text-slate-400 uppercase text-[10px] font-bold border-b border-slate-800 tracking-wider">
-                    <tr>
-                      <th className="py-2.5 px-3">Source</th>
-                      <th className="py-2.5 px-3">Type</th>
-                      <th className="py-2.5 px-3 text-right">Price</th>
-                      <th className="py-2.5 px-3">Condition</th>
-                      <th className="py-2.5 px-3">Seller</th>
-                      <th className="py-2.5 px-3">Captured</th>
-                      <th className="py-2.5 px-3">Provenance</th>
-                      <th className="py-2.5 px-3 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-850 text-slate-300">
-                    {activeResearch.observations.map((obs) => (
-                      <tr key={obs.id} className="hover:bg-slate-900/60 transition-colors">
-                        <td className="py-2.5 px-3 font-semibold text-white">{obs.source}</td>
-                        <td className="py-2.5 px-3">
-                          <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
-                            obs.priceType === "SOLD_PRICE"
-                              ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
-                              : obs.priceType === "CURRENT_BID"
-                              ? "bg-amber-500/10 text-amber-400 border border-amber-500/30"
-                              : "bg-blue-500/10 text-blue-400 border border-blue-500/30"
-                          }`}>
-                            {obs.priceType.replace("_", " ")}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono font-bold text-white">
-                          {fmt(obs.price)}
-                        </td>
-                        <td className="py-2.5 px-3 text-slate-400 text-[11px]">
-                          {obs.condition ? obs.condition.replace("_", " ") : "N/A"}
-                        </td>
-                        <td className="py-2.5 px-3 text-slate-400 text-[11px] truncate max-w-[140px]">
-                          {obs.seller && !obs.seller.toLowerCase().includes("simulated") ? obs.seller : "—"}
-                        </td>
-                        <td className="py-2.5 px-3 text-slate-400 text-[11px]">
-                          {new Date(obs.capturedAt).toLocaleDateString([], { month: "short", day: "numeric" })}
-                        </td>
-                        <td className="py-2.5 px-3">
-                          <span className="text-[10px] font-mono text-slate-400 font-semibold">
-                            {obs.provenance}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-right">
-                          {obs.externalUrl && isGenuineListingUrl(obs.externalUrl) ? (
-                            <a
-                              href={obs.externalUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-[10px] font-bold text-blue-400 hover:text-blue-300 underline"
-                            >
-                              View Listing ↗
-                            </a>
-                          ) : (
-                            <span className="text-slate-600 text-[10px]">—</span>
-                          )}
-                        </td>
+            {(() => {
+              const isPart = activeResearch.resolvedProduct?.identifierType === "LEGO_PART";
+              const displayedObs = activeResearch.observations.filter(
+                obs => selectedColorFilter === null || obs.color === selectedColorFilter || (selectedColorFilter === "Standard / Unspecified" && !obs.color)
+              );
+
+              if (activeResearch.observations.length === 0) {
+                return (
+                  <div className="p-8 text-center bg-slate-950 rounded-xl border border-slate-800 text-xs text-slate-400">
+                    {activeResearch.message || "No genuine market observations found across configured sources."}
+                  </div>
+                );
+              }
+
+              return (
+                <div className="border border-slate-800 rounded-xl overflow-x-auto bg-slate-950">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-900/90 text-slate-400 uppercase text-[10px] font-bold border-b border-slate-800 tracking-wider">
+                      <tr>
+                        <th className="py-2.5 px-3">Source</th>
+                        <th className="py-2.5 px-3">Type</th>
+                        <th className="py-2.5 px-3 text-right">Price</th>
+                        {isPart && <th className="py-2.5 px-3">Color</th>}
+                        <th className="py-2.5 px-3">Condition</th>
+                        <th className="py-2.5 px-3">Seller</th>
+                        <th className="py-2.5 px-3">Captured</th>
+                        <th className="py-2.5 px-3">Provenance</th>
+                        <th className="py-2.5 px-3 text-right">Action</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                    </thead>
+                    <tbody className="divide-y divide-slate-850 text-slate-300">
+                      {displayedObs.map((obs) => (
+                        <tr key={obs.id} className="hover:bg-slate-900/60 transition-colors">
+                          <td className="py-2.5 px-3 font-semibold text-white">{obs.source}</td>
+                          <td className="py-2.5 px-3">
+                            <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
+                              obs.priceType === "SOLD_PRICE"
+                                ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
+                                : obs.priceType === "CURRENT_BID"
+                                ? "bg-amber-500/10 text-amber-400 border border-amber-500/30"
+                                : "bg-blue-500/10 text-blue-400 border border-blue-500/30"
+                            }`}>
+                              {obs.priceType.replace("_", " ")}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono font-bold text-white">
+                            {fmt(obs.price)}
+                          </td>
+                          {isPart && (
+                            <td className="py-2.5 px-3 text-purple-300 text-[11px] font-medium">
+                              {obs.color || "Standard"}
+                            </td>
+                          )}
+                          <td className="py-2.5 px-3 text-slate-400 text-[11px]">
+                            {obs.condition ? obs.condition.replace("_", " ") : "N/A"}
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-400 text-[11px] truncate max-w-[140px]">
+                            {obs.seller && !obs.seller.toLowerCase().includes("simulated") ? obs.seller : "—"}
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-400 text-[11px]">
+                            {new Date(obs.capturedAt).toLocaleDateString([], { month: "short", day: "numeric" })}
+                          </td>
+                          <td className="py-2.5 px-3">
+                            <span className="text-[10px] font-mono text-slate-400 font-semibold">
+                              {obs.provenance}
+                            </span>
+                          </td>
+                          <td className="py-2.5 px-3 text-right">
+                            {obs.externalUrl && isGenuineListingUrl(obs.externalUrl) ? (
+                              <a
+                                href={obs.externalUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[10px] font-bold text-blue-400 hover:text-blue-300 underline"
+                              >
+                                View Listing ↗
+                              </a>
+                            ) : (
+                              <span className="text-slate-600 text-[10px]">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
           </div>
         </section>
       )}

@@ -3,6 +3,7 @@ import { ObservationProvenance } from "@prisma/client";
 export const GENUINE_PROVENANCES: readonly ObservationProvenance[] = [
   ObservationProvenance.LIVE_API,
   ObservationProvenance.LIVE_SCRAPE,
+  ObservationProvenance.LIVE_SEARCH,
   ObservationProvenance.MANUAL,
   ObservationProvenance.IMPORTED,
 ] as const;

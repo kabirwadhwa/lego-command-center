@@ -665,11 +665,11 @@ export async function researchLegoSetAction(params: {
     }
 
     const { MarketResearchService } = await import("@/services/pricing/marketResearchService");
-    const normalized = MarketResearchService.normalizeSetNumber(params.setNumber);
-    if (!MarketResearchService.isValidSetNumber(normalized)) {
+    const rawInput = (params.setNumber || "").trim();
+    if (!rawInput || rawInput.length < 3) {
       return {
         success: false as const,
-        error: "Invalid LEGO set number. Please enter a valid 3 to 7 digit set number (e.g. 10316).",
+        error: "Invalid LEGO set number or identifier. Please enter a valid set number, part ID, SKU, or EAN.",
       };
     }
 
@@ -679,7 +679,7 @@ export async function researchLegoSetAction(params: {
 
     const result = await MarketResearchService.researchLegoSet({
       ...params,
-      setNumber: normalized,
+      setNumber: rawInput,
       forceRefresh
     });
 

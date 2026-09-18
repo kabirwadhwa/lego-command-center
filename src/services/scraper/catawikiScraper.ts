@@ -243,24 +243,28 @@ export class CatawikiScraperService {
     try {
       const allRawItems: RawApifyLotItem[] = [];
 
-      // Step 1: Discover Completed / Sold Lots via Google Search Scraper
-      const googleQuery = `site:catawiki.com/en/l/ "${cleanId}" LEGO`;
-      console.log(`[CatawikiScraper] Step 1: Discovering completed lots via Google: ${googleQuery}`);
+      // Step 1: Discover Completed / Sold Lots (Curated Catalog Reference + Google Discovery)
+      const { lookupKnownSet } = await import("@/services/catalog/legoSetsCatalog");
+      const knownSet = lookupKnownSet(cleanId);
+      let candidateLotUrls: string[] = knownSet?.knownLotUrls ? [...knownSet.knownLotUrls] : [];
 
-      let candidateLotUrls: string[] = [];
-      try {
-        const googleRes = await fetch(
-          `https://api.apify.com/v2/acts/apify~google-search-scraper/run-sync-get-dataset-items?token=${apifyToken}&timeout=45`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              queries: googleQuery,
-              maxPagesPerQuery: 1,
-              resultsPerPage: 10,
-            }),
-          }
-        );
+      if (candidateLotUrls.length < 3) {
+        const googleQuery = `site:catawiki.com/en/l/ "${cleanId}" LEGO`;
+        console.log(`[CatawikiScraper] Step 1: Discovering completed lots via Google: ${googleQuery}`);
+
+        try {
+          const googleRes = await fetch(
+            `https://api.apify.com/v2/acts/apify~google-search-scraper/run-sync-get-dataset-items?token=${apifyToken}&timeout=40`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                queries: googleQuery,
+                maxPagesPerQuery: 1,
+                resultsPerPage: 10,
+              }),
+            }
+          );
 
         if (googleRes.status === 401 || googleRes.status === 403) {
           telemetry.status = "AUTH_FAILED";
@@ -287,8 +291,9 @@ export class CatawikiScraperService {
             }
           }
         }
-      } catch (gErr) {
-        console.warn(`[CatawikiScraper] Google search discovery warning for ${cleanId}:`, gErr);
+        } catch (gErr) {
+          console.warn(`[CatawikiScraper] Google search discovery warning for ${cleanId}:`, gErr);
+        }
       }
 
       candidateLotUrls = Array.from(new Set(candidateLotUrls)).slice(0, 8);

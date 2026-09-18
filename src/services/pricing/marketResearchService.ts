@@ -4,9 +4,14 @@ import { CatawikiScraperService, CatawikiScrapedLot } from "../scraper/catawikiS
 import { PriceEngineService, ConfidenceTier } from "./priceEngineService";
 import {
   getFeeStructure,
+  calculateBreakevenFloor,
   calculateChannelProceeds
 } from "./feeService";
-import { getAppMode } from "@/lib/auth";
+import {
+  isEligibleForRealMarketPricing,
+  GENUINE_PROVENANCES,
+  isGenuineListingUrl
+} from "./evidenceEligibility";
 import fs from "fs";
 import path from "path";
 
@@ -28,14 +33,14 @@ export interface PricingResearchObservation {
 export interface PurchaseScenario {
   hypotheticalCost: number;
   targetChannel: string;
-  estimatedSellingPrice: number;
-  estimatedFees: number;
-  estimatedShipping: number;
-  estimatedNetProceeds: number;
-  potentialProfit: number;
-  potentialMargin: number; // percentage
+  estimatedSellingPrice: number | null;
+  estimatedFees: number | null;
+  estimatedShipping: number | null;
+  estimatedNetProceeds: number | null;
+  potentialProfit: number | null;
+  potentialMargin: number | null; // percentage
   breakevenPrice: number | null;
-  potentialRoi: number; // percentage
+  potentialRoi: number | null; // percentage
 }
 
 export type ResearchStatus =
@@ -237,33 +242,18 @@ export class MarketResearchService {
     isStale: boolean;
     sourceError?: string;
   }> {
-    const appMode = getAppMode();
-    const isProduction = appMode === "production";
-
-    // Provenance filter: production strictly excludes SIMULATED
-    const allowedProvenances: ObservationProvenance[] = isProduction
-      ? [
-          ObservationProvenance.LIVE_API,
-          ObservationProvenance.LIVE_SCRAPE,
-          ObservationProvenance.MANUAL,
-          ObservationProvenance.IMPORTED
-        ]
-      : [
-          ObservationProvenance.LIVE_API,
-          ObservationProvenance.LIVE_SCRAPE,
-          ObservationProvenance.MANUAL,
-          ObservationProvenance.IMPORTED,
-          ObservationProvenance.SIMULATED
-        ];
+    // Invariant: strictly genuine provenances across all environments and runtimes
+    const allowedProvenances: ObservationProvenance[] = [...GENUINE_PROVENANCES];
 
     // Check existing stored snapshots
-    const existingSnapshots = await prisma.marketPriceSnapshot.findMany({
+    const existingSnapshotsRaw = await prisma.marketPriceSnapshot.findMany({
       where: {
         productId,
         provenance: { in: allowedProvenances }
       },
       orderBy: { capturedAt: "desc" }
     });
+    const existingSnapshots = existingSnapshotsRaw.filter(isEligibleForRealMarketPricing);
 
     const now = Date.now();
     const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
@@ -302,13 +292,8 @@ export class MarketResearchService {
       sourceError = err instanceof Error ? err.message : "Catawiki scraper request failed";
     }
 
-    // In production, strictly reject any SIMULATED lots
-    const validLots = scraperLots.filter(lot => {
-      if (isProduction && lot.provenance === ObservationProvenance.SIMULATED) {
-        return false;
-      }
-      return true;
-    });
+    // Invariant: unconditionally filter lots through isEligibleForRealMarketPricing
+    const validLots = scraperLots.filter(isEligibleForRealMarketPricing);
 
     // Save newly scraped valid lots to database
     for (const lot of validLots) {
@@ -344,13 +329,14 @@ export class MarketResearchService {
     }
 
     // Re-query all valid snapshots
-    const allSnapshots = await prisma.marketPriceSnapshot.findMany({
+    const allSnapshotsRaw = await prisma.marketPriceSnapshot.findMany({
       where: {
         productId,
         provenance: { in: allowedProvenances }
       },
       orderBy: { capturedAt: "desc" }
     });
+    const allSnapshots = allSnapshotsRaw.filter(isEligibleForRealMarketPricing);
 
     return {
       observations: allSnapshots.map(s => this.mapSnapshotToObservation(s)),
@@ -372,6 +358,10 @@ export class MarketResearchService {
     externalUrl?: string | null;
     availability: boolean;
   }): PricingResearchObservation {
+    const rawSeller = snapshot.seller?.trim();
+    const seller = (rawSeller && !rawSeller.toLowerCase().includes("simulated")) ? rawSeller : null;
+    const url = (snapshot.externalUrl && isGenuineListingUrl(snapshot.externalUrl)) ? snapshot.externalUrl : null;
+
     return {
       id: snapshot.id,
       source: snapshot.marketplace,
@@ -382,8 +372,8 @@ export class MarketResearchService {
       condition: snapshot.condition,
       capturedAt: snapshot.capturedAt,
       provenance: snapshot.provenance,
-      seller: snapshot.seller,
-      externalUrl: snapshot.externalUrl,
+      seller,
+      externalUrl: url,
       availability: snapshot.availability
     };
   }
@@ -453,11 +443,12 @@ export class MarketResearchService {
     });
 
     // 3. Get market observations
-    const { observations, isStale, sourceError } = await this.getMarketObservations(
+    const { observations: rawObservations, isStale, sourceError } = await this.getMarketObservations(
       product.id,
       normalizedSetNumber,
       forceRefresh
     );
+    const observations = rawObservations.filter(isEligibleForRealMarketPricing);
 
     const prices = observations.map(o => o.price);
     const capturedDates = observations.map(o => o.capturedAt);
@@ -476,6 +467,7 @@ export class MarketResearchService {
     const metrics = PriceEngineService.calculateMetrics(prices, capturedDates, priceTypes);
 
     // 5. Determine recommended market price
+    // Invariant: strictly requires >= 2 genuine market observations
     let recommendedPrice: number | null = null;
     if (metrics.median > 0 && observations.length >= 2) {
       recommendedPrice = Math.round((metrics.median * 0.99) * 100) / 100;
@@ -486,21 +478,37 @@ export class MarketResearchService {
     let purchaseScenario: PurchaseScenario | null = null;
 
     if (hypotheticalCost !== null && hypotheticalCost !== undefined && hypotheticalCost > 0) {
-      const evaluationPrice = recommendedPrice || metrics.median || hypotheticalCost * 1.35;
-      const proceeds = calculateChannelProceeds(evaluationPrice, hypotheticalCost, feeStructure);
+      const breakeven = calculateBreakevenFloor(hypotheticalCost, feeStructure);
 
-      purchaseScenario = {
-        hypotheticalCost,
-        targetChannel: feeStructure.channel,
-        estimatedSellingPrice: proceeds.sellingPrice,
-        estimatedFees: proceeds.totalFees,
-        estimatedShipping: proceeds.shippingCost,
-        estimatedNetProceeds: proceeds.netProceeds,
-        potentialProfit: proceeds.contributionProfit ?? 0,
-        potentialMargin: proceeds.grossMarginPct ?? 0,
-        breakevenPrice: proceeds.breakevenPrice,
-        potentialRoi: proceeds.roiPct ?? 0
-      };
+      if (recommendedPrice !== null && recommendedPrice > 0) {
+        const proceeds = calculateChannelProceeds(recommendedPrice, hypotheticalCost, feeStructure);
+        purchaseScenario = {
+          hypotheticalCost,
+          targetChannel: feeStructure.channel,
+          estimatedSellingPrice: proceeds.sellingPrice,
+          estimatedFees: proceeds.totalFees,
+          estimatedShipping: proceeds.shippingCost,
+          estimatedNetProceeds: proceeds.netProceeds,
+          potentialProfit: proceeds.contributionProfit,
+          potentialMargin: proceeds.grossMarginPct,
+          breakevenPrice: proceeds.breakevenPrice,
+          potentialRoi: proceeds.roiPct
+        };
+      } else {
+        // When genuine market observations < 2, never fabricate selling price, profit, margin or ROI
+        purchaseScenario = {
+          hypotheticalCost,
+          targetChannel: feeStructure.channel,
+          estimatedSellingPrice: null,
+          estimatedFees: null,
+          estimatedShipping: feeStructure.estimatedShipping,
+          estimatedNetProceeds: null,
+          potentialProfit: null,
+          potentialMargin: null,
+          breakevenPrice: breakeven,
+          potentialRoi: null
+        };
+      }
     }
 
     // 7. Determine status
@@ -508,7 +516,7 @@ export class MarketResearchService {
     let message = "Research complete with live market observations.";
 
     if (observations.length === 0) {
-      if (sourceError || (!process.env.APIFY_API_TOKEN && getAppMode() === "production")) {
+      if (sourceError || !process.env.APIFY_API_TOKEN) {
         status = "EXTERNAL_SOURCE_FAILURE";
         message = "Live market evidence unavailable: external price source unconfigured or failed.";
       } else {
@@ -529,16 +537,16 @@ export class MarketResearchService {
           theme: product.theme,
           imageUrl: product.imageUrl,
           recommendedPrice: recommendedPrice !== null ? new Prisma.Decimal(recommendedPrice) : null,
-          marketMedian: metrics.median > 0 ? new Prisma.Decimal(metrics.median) : null,
-          marketMin: metrics.min > 0 ? new Prisma.Decimal(metrics.min) : null,
-          marketMax: metrics.max > 0 ? new Prisma.Decimal(metrics.max) : null,
+          marketMedian: (metrics.median > 0 && observations.length >= 2) ? new Prisma.Decimal(metrics.median) : null,
+          marketMin: (metrics.min > 0 && observations.length >= 2) ? new Prisma.Decimal(metrics.min) : null,
+          marketMax: (metrics.max > 0 && observations.length >= 2) ? new Prisma.Decimal(metrics.max) : null,
           observationCount: observations.length,
-          confidenceScore: metrics.confidenceScore > 0 ? metrics.confidenceScore : null,
-          confidenceTier: metrics.confidenceTier,
+          confidenceScore: (metrics.confidenceScore > 0 && observations.length >= 2) ? metrics.confidenceScore : null,
+          confidenceTier: observations.length < 2 ? "INSUFFICIENT" : metrics.confidenceTier,
           targetChannel,
           hypotheticalCost: hypotheticalCost ? new Prisma.Decimal(hypotheticalCost) : null,
-          potentialMargin: purchaseScenario?.potentialMargin !== undefined ? new Prisma.Decimal(purchaseScenario.potentialMargin) : null,
-          potentialProfit: purchaseScenario?.potentialProfit !== undefined ? new Prisma.Decimal(purchaseScenario.potentialProfit) : null,
+          potentialMargin: (purchaseScenario?.potentialMargin !== null && purchaseScenario?.potentialMargin !== undefined) ? new Prisma.Decimal(purchaseScenario.potentialMargin) : null,
+          potentialProfit: (purchaseScenario?.potentialProfit !== null && purchaseScenario?.potentialProfit !== undefined) ? new Prisma.Decimal(purchaseScenario.potentialProfit) : null,
           status,
           researchedAt: new Date()
         }
@@ -559,11 +567,11 @@ export class MarketResearchService {
       soldObservationCount: soldCount,
       askingObservationCount: askingCount,
       currentBidObservationCount: bidCount,
-      medianPrice: metrics.median > 0 ? metrics.median : null,
-      meanPrice: metrics.mean > 0 ? metrics.mean : null,
-      minimumObservedPrice: metrics.min > 0 ? metrics.min : null,
-      maximumObservedPrice: metrics.max > 0 ? metrics.max : null,
-      confidenceScore: metrics.confidenceScore > 0 ? metrics.confidenceScore : null,
+      medianPrice: (metrics.median > 0 && observations.length >= 2) ? metrics.median : null,
+      meanPrice: (metrics.mean > 0 && observations.length >= 2) ? metrics.mean : null,
+      minimumObservedPrice: (metrics.min > 0 && observations.length >= 2) ? metrics.min : null,
+      maximumObservedPrice: (metrics.max > 0 && observations.length >= 2) ? metrics.max : null,
+      confidenceScore: (metrics.confidenceScore > 0 && observations.length >= 2) ? metrics.confidenceScore : null,
       confidenceTier: observations.length < 2 ? "INSUFFICIENT" : metrics.confidenceTier,
       recommendedMarketPrice: recommendedPrice,
       currency: "EUR",

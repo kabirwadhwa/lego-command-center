@@ -1,13 +1,17 @@
 import prisma from "@/lib/prisma";
-import { AlertSeverity, AlertType, ObservationProvenance, PriceType, Prisma } from "@prisma/client";
+import { AlertSeverity, AlertType, PriceType, Prisma } from "@prisma/client";
 import { CatawikiScraperService } from "../scraper/catawikiScraper";
-import { getAppMode } from "@/lib/auth";
 import {
   MARKETPLACE_FEES,
   MarketplaceFeeStructure,
   calculateBreakevenFloor,
   getFeeStructure
 } from "./feeService";
+import {
+  isEligibleForRealMarketPricing,
+  GENUINE_PROVENANCES,
+  isGenuineListingUrl,
+} from "./evidenceEligibility";
 
 export type ConfidenceTier = "INSUFFICIENT" | "LOW" | "MEDIUM" | "HIGH";
 export {
@@ -15,6 +19,11 @@ export {
   type MarketplaceFeeStructure,
   calculateBreakevenFloor,
   getFeeStructure
+};
+export {
+  isEligibleForRealMarketPricing,
+  GENUINE_PROVENANCES,
+  isGenuineListingUrl,
 };
 
 export interface PricingMetrics {
@@ -283,39 +292,30 @@ export class PriceEngineService {
     const feeStructure = MARKETPLACE_FEES[channel] || MARKETPLACE_FEES.DEFAULT;
 
     // 1. Query recent observations (last 45 days)
-    // Production rule: exclude SIMULATED observations
-    const allowedProvenances: ObservationProvenance[] = [
-      ObservationProvenance.LIVE_API,
-      ObservationProvenance.LIVE_SCRAPE,
-      ObservationProvenance.MANUAL,
-      ObservationProvenance.IMPORTED,
-    ];
-
-    if (options?.allowSimulated && getAppMode() === "demo") {
-      allowedProvenances.push(ObservationProvenance.SIMULATED);
-    }
-
+    // Production invariant: strictly genuine observations only across all runtimes
     const fortyFiveDaysAgo = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000);
-    let snapshots = await prisma.marketPriceSnapshot.findMany({
+    let rawSnapshots = await prisma.marketPriceSnapshot.findMany({
       where: {
         productId: variant.productId,
         capturedAt: { gte: fortyFiveDaysAgo },
-        provenance: { in: allowedProvenances },
+        provenance: { in: [...GENUINE_PROVENANCES] },
       },
       orderBy: { capturedAt: "desc" }
     });
+    let snapshots = rawSnapshots.filter(isEligibleForRealMarketPricing);
 
     // If fewer than 2 genuine observations, trigger fresh scrape
     if (snapshots.length < 2) {
       await CatawikiScraperService.refreshSetPrices(setNumber);
-      snapshots = await prisma.marketPriceSnapshot.findMany({
+      rawSnapshots = await prisma.marketPriceSnapshot.findMany({
         where: {
           productId: variant.productId,
           capturedAt: { gte: fortyFiveDaysAgo },
-          provenance: { in: allowedProvenances },
+          provenance: { in: [...GENUINE_PROVENANCES] },
         },
         orderBy: { capturedAt: "desc" }
       });
+      snapshots = rawSnapshots.filter(isEligibleForRealMarketPricing);
     }
 
     // If STILL fewer than 2 observations, return insufficient evidence state

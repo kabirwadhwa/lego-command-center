@@ -1,6 +1,5 @@
 import prisma from "@/lib/prisma";
 import { AlertSeverity, AlertType, ObservationProvenance, PriceType } from "@prisma/client";
-import { getAppMode } from "@/lib/auth";
 
 export interface RawApifyLotItem {
   id?: string | number;
@@ -43,16 +42,17 @@ export interface CatawikiScrapedLot {
 
 export class CatawikiScraperService {
   /**
-   * Fetches market observations for a given LEGO set number.
+   * Fetches genuine market observations for a given LEGO set number.
    * If APIFY_API_TOKEN is configured, queries the Apify saswave/catawiki-scraper actor.
-   * IN PRODUCTION: If Apify fails or is unconfigured, returns empty array.
-   * SYNTHETIC DATA IS STRICTLY FORBIDDEN FROM PRODUCTION.
+   * If Apify fails or is unconfigured, returns empty array.
+   * Synthetic or simulated data is strictly forbidden across all application runtimes.
    */
   static async fetchMarketObservations(
     setNumber: string,
-    fallbackBaselineCost: number = 100.0,
+    _fallbackBaselineCost: number = 100.0,
     maxItems: number = 20
   ): Promise<CatawikiScrapedLot[]> {
+    void _fallbackBaselineCost;
     const apifyToken = process.env.APIFY_API_TOKEN;
 
     if (apifyToken) {
@@ -87,27 +87,28 @@ export class CatawikiScraperService {
       }
     }
 
-    // PRODUCTION RULE: Never fabricate market observations in production runtime
-    if (getAppMode() === "production") {
-      console.warn(`[CatawikiScraper] Apify unconfigured or scrape returned 0 items for ${setNumber}. Production will not invent synthetic observations.`);
-      return [];
+    // Invariant: Never fabricate market observations in ANY application runtime.
+    // Provider unconfigured or returned 0 items -> return empty array.
+    if (!apifyToken) {
+      console.warn(`[CatawikiScraper] APIFY_API_TOKEN unconfigured for set ${setNumber}. Returning empty market observations.`);
+    } else {
+      console.warn(`[CatawikiScraper] Apify search returned 0 matching items for set ${setNumber}.`);
     }
-
-    // Explicit non-production demo/testing fixture fallback ONLY
-    return this.generateSimulatedObservations(setNumber, fallbackBaselineCost, maxItems);
+    return [];
   }
 
   /**
    * Validates and parses raw Apify dataset records into structured lots.
-   * Strictly verifies set number regex matching and filters malformed observations.
+   * Strictly verifies set number boundary regex matching and filters malformed observations.
    */
   static parseApifyDataset(items: RawApifyLotItem[], setNumber: string): CatawikiScrapedLot[] {
-    const regex = new RegExp(`\\b${setNumber}\\b`, "i");
+    const escaped = setNumber.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(`(?:^|[^0-9A-Za-z])${escaped}(?:[^0-9A-Za-z]|$)`, "i");
     const results: CatawikiScrapedLot[] = [];
 
     for (const item of items) {
       const title = String(item.title || item.name || "");
-      // Exact set number match check
+      // Exact set number boundary match check
       if (!regex.test(title)) continue;
 
       const rawPrice = item.currentBid || item.soldPrice || item.price || item.bids?.[0]?.amount;
@@ -124,9 +125,21 @@ export class CatawikiScraperService {
         continue;
       }
 
-      const sellerName = typeof item.seller === "object" && item.seller !== null
-        ? item.seller.name || "Catawiki Verified Seller"
-        : String(item.seller || "Catawiki Verified Seller");
+      let sellerName: string | undefined = undefined;
+      if (typeof item.seller === "object" && item.seller !== null && item.seller.name) {
+        sellerName = String(item.seller.name);
+      } else if (typeof item.seller === "string" && item.seller.trim().length > 0) {
+        sellerName = item.seller.trim();
+      }
+      if (sellerName && sellerName.toLowerCase().includes("simulated")) {
+        sellerName = undefined;
+      }
+
+      let externalUrl: string | undefined = undefined;
+      const rawUrl = item.url || item.lotUrl || (item.id ? `https://www.catawiki.com/en/l/${item.id}` : undefined);
+      if (rawUrl && (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) && !rawUrl.toLowerCase().includes("simulated")) {
+        externalUrl = rawUrl;
+      }
 
       results.push({
         externalListingId: String(item.id || item.lotId || `cw-${Date.now()}-${results.length}`),
@@ -137,7 +150,7 @@ export class CatawikiScraperService {
         shippingCost: item.shippingFee || (item.shipping ? parseFloat(String(item.shipping)) : 15.0),
         condition: item.condition?.toUpperCase().includes("SEALED") ? "NEW_SEALED" : "USED_COMPLETE",
         seller: sellerName,
-        externalUrl: item.url || item.lotUrl || (item.id ? `https://www.catawiki.com/en/l/${item.id}` : undefined),
+        externalUrl,
         auctionEndAt: item.endDate ? new Date(item.endDate) : undefined,
         capturedAt: item.capturedAt ? new Date(item.capturedAt) : new Date(),
         provenance: ObservationProvenance.LIVE_SCRAPE,
@@ -147,48 +160,6 @@ export class CatawikiScraperService {
     }
 
     return results;
-  }
-
-  /**
-   * Explicitly labeled simulated observations for unit testing and local demo fixtures ONLY.
-   * MUST NOT enter production recommendation calculations.
-   */
-  static generateSimulatedObservations(
-    setNumber: string,
-    baselineCost: number,
-    count: number = 8
-  ): CatawikiScrapedLot[] {
-    const cost = baselineCost > 0 ? baselineCost : 80.0;
-    const marketMid = Math.round(cost * 1.42 * 100) / 100;
-    const now = Date.now();
-    const lots: CatawikiScrapedLot[] = [];
-
-    const seed = setNumber.split("").reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
-
-    for (let i = 0; i < count; i++) {
-      const spreadPct = (((seed + i * 17) % 25) - 12) / 100; // -12% to +12%
-      const price = Math.round((marketMid * (1 + spreadPct)) * 100) / 100;
-      const isSold = i < count - 2;
-      const daysAgo = (i * 3) + 1;
-
-      lots.push({
-        externalListingId: `simulated-catawiki-lot-${setNumber}-${1000 + i}`,
-        title: `[SIMULATED] LEGO Set ${setNumber} Lot #${1000 + i}`,
-        price,
-        priceType: isSold ? PriceType.SOLD_PRICE : PriceType.CURRENT_BID,
-        currency: "EUR",
-        shippingCost: 14.50,
-        condition: "NEW_SEALED",
-        seller: `Simulated Seller #${(seed + i) % 90 + 10}`,
-        externalUrl: `https://www.catawiki.com/en/l/simulated-${setNumber}-${1000 + i}`,
-        auctionEndAt: isSold ? new Date(now - daysAgo * 86400000) : new Date(now + 2 * 86400000),
-        capturedAt: new Date(now - daysAgo * 86400000),
-        provenance: ObservationProvenance.SIMULATED,
-        provider: "simulator/demo"
-      });
-    }
-
-    return lots;
   }
 
   /**

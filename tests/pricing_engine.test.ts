@@ -146,17 +146,12 @@ describe("PriceEngineService & CatawikiScraperService", () => {
       expect(observations).toEqual([]);
     });
 
-    it("generates simulated observations with SIMULATED provenance in demo mode", async () => {
+    it("does NOT fabricate synthetic observations even in demo mode", async () => {
       process.env.APP_MODE = "demo";
       const setNumber = "10330";
       const observations = await CatawikiScraperService.fetchMarketObservations(setNumber, 150.0, 4);
-      expect(observations.length).toBe(4);
-      for (const obs of observations) {
-        expect(obs.provenance).toBe(ObservationProvenance.SIMULATED);
-        expect(obs.price).toBeGreaterThan(100);
-        expect(obs.currency).toBe("EUR");
-        expect(obs.title).toContain(setNumber);
-      }
+      // Absolute invariant: no simulated data anywhere in application runtime
+      expect(observations).toEqual([]);
     });
 
     it("parses Apify dataset items and enforces exact set number boundary matching", () => {

@@ -77,14 +77,14 @@ interface ResearchObservationUI {
 interface PurchaseScenarioUI {
   hypotheticalCost: number;
   targetChannel: string;
-  estimatedSellingPrice: number;
-  estimatedFees: number;
-  estimatedShipping: number;
-  estimatedNetProceeds: number;
-  potentialProfit: number;
-  potentialMargin: number;
+  estimatedSellingPrice?: number | null;
+  estimatedFees?: number | null;
+  estimatedShipping?: number | null;
+  estimatedNetProceeds?: number | null;
+  potentialProfit?: number | null;
+  potentialMargin?: number | null;
   breakevenPrice: number | null;
-  potentialRoi: number;
+  potentialRoi?: number | null;
 }
 
 interface ResearchResultUI {
@@ -199,6 +199,14 @@ export default function PricingManager({
   const fmtPct = (val: number | null | undefined) => {
     if (val === null || val === undefined) return "N/A";
     return `${val >= 0 ? "+" : ""}${val.toFixed(1)}%`;
+  };
+
+  const isGenuineListingUrl = (url: string | null | undefined) => {
+    if (!url) return false;
+    const trimmed = url.trim();
+    if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return false;
+    if (trimmed.toLowerCase().includes("simulated")) return false;
+    return true;
   };
 
   // 1. Research Handler
@@ -658,7 +666,7 @@ export default function PricingManager({
                 </div>
               )}
               <div className="space-y-1">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="px-2.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-slate-950 text-blue-400 border border-blue-500/30">
                     Set {activeResearch.setNumber}
                   </span>
@@ -667,15 +675,35 @@ export default function PricingManager({
                       {activeResearch.theme}
                     </span>
                   )}
-                  {/* Data Freshness Indicator */}
-                  {activeResearch.isStale ? (
+                  {/* Status Indicator */}
+                  {activeResearch.status === "SUCCESS" ? (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                      LIVE DATA AVAILABLE
+                    </span>
+                  ) : activeResearch.status === "INSUFFICIENT_DATA" ? (
                     <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">
-                      Market data may be stale (&gt;6h)
+                      INSUFFICIENT EVIDENCE
+                    </span>
+                  ) : activeResearch.status === "NO_DATA" ? (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                      NO MARKET DATA FOUND
                     </span>
                   ) : (
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                      Fresh (&lt;6h)
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/10 text-rose-400 border border-rose-500/30">
+                      MARKET SOURCE UNAVAILABLE
                     </span>
+                  )}
+                  {/* Data Freshness Indicator */}
+                  {activeResearch.observationCount > 0 && (
+                    activeResearch.isStale ? (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                        Market data may be stale (&gt;6h)
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                        Fresh (&lt;6h)
+                      </span>
+                    )
                   )}
                 </div>
                 <h3 className="text-lg font-bold text-white">
@@ -712,14 +740,14 @@ export default function PricingManager({
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-center">
             <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Recommended Price</span>
-              <span className="text-base font-extrabold text-emerald-400 block mt-1">
-                {fmt(activeResearch.recommendedMarketPrice)}
+              <span className={`text-base font-extrabold block mt-1 ${activeResearch.recommendedMarketPrice !== null ? "text-emerald-400" : "text-slate-400 text-sm"}`}>
+                {activeResearch.recommendedMarketPrice !== null ? fmt(activeResearch.recommendedMarketPrice) : "Unavailable"}
               </span>
             </div>
             <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Market Median</span>
-              <span className="text-base font-extrabold text-white block mt-1">
-                {fmt(activeResearch.medianPrice)}
+              <span className={`text-base font-extrabold block mt-1 ${activeResearch.medianPrice !== null ? "text-white" : "text-slate-500 text-sm"}`}>
+                {activeResearch.medianPrice !== null ? fmt(activeResearch.medianPrice) : "N/A"}
               </span>
             </div>
             <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
@@ -730,8 +758,10 @@ export default function PricingManager({
             </div>
             <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Confidence</span>
-              <span className="text-sm font-bold text-blue-400 block mt-1">
-                {activeResearch.confidenceScore !== null ? `${activeResearch.confidenceScore}% (${activeResearch.confidenceTier})` : "Unknown"}
+              <span className={`text-sm font-bold block mt-1 ${activeResearch.confidenceScore !== null && activeResearch.confidenceTier !== "INSUFFICIENT" && activeResearch.confidenceTier !== "Unknown" ? "text-blue-400" : "text-slate-500 text-xs"}`}>
+                {activeResearch.confidenceScore !== null && activeResearch.confidenceTier !== "INSUFFICIENT" && activeResearch.confidenceTier !== "Unknown"
+                  ? `${activeResearch.confidenceScore}% (${activeResearch.confidenceTier})`
+                  : activeResearch.observationCount > 0 ? "Insufficient evidence" : "Unknown"}
               </span>
             </div>
             <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
@@ -740,7 +770,7 @@ export default function PricingManager({
                 {activeResearch.observationCount} genuine
               </span>
               <span className="text-[9px] text-slate-500 block">
-                {activeResearch.soldObservationCount} sold · {activeResearch.askingObservationCount + activeResearch.currentBidObservationCount} active
+                {activeResearch.observationCount === 0 ? "0 genuine observations found" : `${activeResearch.soldObservationCount} sold · ${activeResearch.askingObservationCount + activeResearch.currentBidObservationCount} active`}
               </span>
             </div>
             <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
@@ -752,6 +782,14 @@ export default function PricingManager({
               </span>
             </div>
           </div>
+
+          {/* Insufficient Evidence Warning Banner */}
+          {activeResearch.recommendedMarketPrice === null && (
+            <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 text-amber-300 rounded-xl text-xs font-medium flex items-center gap-2">
+              <span>⚠️</span>
+              <span>Recommended price unavailable — insufficient genuine market evidence.</span>
+            </div>
+          )}
 
           {/* Purchase Scenario Section */}
           <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-5 space-y-3">
@@ -770,43 +808,71 @@ export default function PricingManager({
                 </div>
                 <div className="bg-slate-900/90 p-2.5 rounded-lg border border-slate-800">
                   <span className="text-[9px] font-bold text-slate-400 uppercase block">Selling Price</span>
-                  <span className="text-xs font-bold text-slate-200 block mt-0.5">{fmt(activeResearch.purchaseScenario.estimatedSellingPrice)}</span>
+                  <span className="text-xs font-bold text-slate-200 block mt-0.5">
+                    {activeResearch.purchaseScenario.estimatedSellingPrice !== null && activeResearch.purchaseScenario.estimatedSellingPrice !== undefined
+                      ? fmt(activeResearch.purchaseScenario.estimatedSellingPrice)
+                      : "—"}
+                  </span>
                 </div>
                 <div className="bg-slate-900/90 p-2.5 rounded-lg border border-slate-800">
                   <span className="text-[9px] font-bold text-slate-400 uppercase block">Channel Fees</span>
-                  <span className="text-xs font-bold text-rose-400 block mt-0.5">-{fmt(activeResearch.purchaseScenario.estimatedFees)}</span>
+                  <span className="text-xs font-bold text-rose-400 block mt-0.5">
+                    {activeResearch.purchaseScenario.estimatedFees !== null && activeResearch.purchaseScenario.estimatedFees !== undefined
+                      ? `-${fmt(activeResearch.purchaseScenario.estimatedFees)}`
+                      : "—"}
+                  </span>
                 </div>
                 <div className="bg-slate-900/90 p-2.5 rounded-lg border border-slate-800">
                   <span className="text-[9px] font-bold text-slate-400 uppercase block">Shipping Est.</span>
-                  <span className="text-xs font-bold text-slate-300 block mt-0.5">{fmt(activeResearch.purchaseScenario.estimatedShipping)}</span>
+                  <span className="text-xs font-bold text-slate-300 block mt-0.5">
+                    {activeResearch.purchaseScenario.estimatedShipping !== null && activeResearch.purchaseScenario.estimatedShipping !== undefined
+                      ? fmt(activeResearch.purchaseScenario.estimatedShipping)
+                      : "—"}
+                  </span>
                 </div>
                 <div className="bg-slate-900/90 p-2.5 rounded-lg border border-slate-800">
                   <span className="text-[9px] font-bold text-slate-400 uppercase block">Net Proceeds</span>
-                  <span className="text-xs font-bold text-blue-400 block mt-0.5">{fmt(activeResearch.purchaseScenario.estimatedNetProceeds)}</span>
+                  <span className="text-xs font-bold text-blue-400 block mt-0.5">
+                    {activeResearch.purchaseScenario.estimatedNetProceeds !== null && activeResearch.purchaseScenario.estimatedNetProceeds !== undefined
+                      ? fmt(activeResearch.purchaseScenario.estimatedNetProceeds)
+                      : "—"}
+                  </span>
                 </div>
                 <div className="bg-slate-900/90 p-2.5 rounded-lg border border-slate-800">
                   <span className="text-[9px] font-bold text-slate-400 uppercase block">Est. Profit</span>
                   <span className={`text-xs font-bold block mt-0.5 ${
-                    activeResearch.purchaseScenario.potentialProfit >= 0 ? "text-emerald-400" : "text-rose-400"
+                    activeResearch.purchaseScenario.potentialProfit !== null && activeResearch.purchaseScenario.potentialProfit !== undefined
+                      ? (activeResearch.purchaseScenario.potentialProfit >= 0 ? "text-emerald-400" : "text-rose-400")
+                      : "text-slate-500"
                   }`}>
-                    {fmt(activeResearch.purchaseScenario.potentialProfit)}
+                    {activeResearch.purchaseScenario.potentialProfit !== null && activeResearch.purchaseScenario.potentialProfit !== undefined
+                      ? fmt(activeResearch.purchaseScenario.potentialProfit)
+                      : "—"}
                   </span>
                 </div>
                 <div className="bg-slate-900/90 p-2.5 rounded-lg border border-slate-800">
                   <span className="text-[9px] font-bold text-slate-400 uppercase block">Est. Margin</span>
                   <span className={`text-xs font-bold block mt-0.5 ${
-                    activeResearch.purchaseScenario.potentialMargin >= 20
-                      ? "text-emerald-400"
-                      : activeResearch.purchaseScenario.potentialMargin >= 0
-                      ? "text-blue-400"
-                      : "text-rose-400"
+                    activeResearch.purchaseScenario.potentialMargin !== null && activeResearch.purchaseScenario.potentialMargin !== undefined
+                      ? (activeResearch.purchaseScenario.potentialMargin >= 20
+                        ? "text-emerald-400"
+                        : activeResearch.purchaseScenario.potentialMargin >= 0
+                        ? "text-blue-400"
+                        : "text-rose-400")
+                      : "text-slate-500"
                   }`}>
-                    {fmtPct(activeResearch.purchaseScenario.potentialMargin)}
+                    {activeResearch.purchaseScenario.potentialMargin !== null && activeResearch.purchaseScenario.potentialMargin !== undefined
+                      ? fmtPct(activeResearch.purchaseScenario.potentialMargin)
+                      : "—"}
                   </span>
                 </div>
                 <div className="bg-slate-900/90 p-2.5 rounded-lg border border-slate-800">
                   <span className="text-[9px] font-bold text-slate-400 uppercase block">Breakeven Floor</span>
-                  <span className="text-xs font-bold text-amber-400 block mt-0.5">{fmt(activeResearch.purchaseScenario.breakevenPrice)}</span>
+                  <span className="text-xs font-bold text-amber-400 block mt-0.5">
+                    {activeResearch.purchaseScenario.breakevenPrice !== null
+                      ? fmt(activeResearch.purchaseScenario.breakevenPrice)
+                      : "—"}
+                  </span>
                 </div>
               </div>
             ) : (
@@ -866,7 +932,7 @@ export default function PricingManager({
                           {obs.condition ? obs.condition.replace("_", " ") : "N/A"}
                         </td>
                         <td className="py-2.5 px-3 text-slate-400 text-[11px] truncate max-w-[140px]">
-                          {obs.seller || "Catawiki Seller"}
+                          {obs.seller && !obs.seller.toLowerCase().includes("simulated") ? obs.seller : "—"}
                         </td>
                         <td className="py-2.5 px-3 text-slate-400 text-[11px]">
                           {new Date(obs.capturedAt).toLocaleDateString([], { month: "short", day: "numeric" })}
@@ -877,7 +943,7 @@ export default function PricingManager({
                           </span>
                         </td>
                         <td className="py-2.5 px-3 text-right">
-                          {obs.externalUrl ? (
+                          {obs.externalUrl && isGenuineListingUrl(obs.externalUrl) ? (
                             <a
                               href={obs.externalUrl}
                               target="_blank"

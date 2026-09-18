@@ -118,6 +118,10 @@ export default async function InventoryPage({
         take: 1,
         orderBy: { updatedAt: "desc" },
       },
+      listings: {
+        where: { status: "ACTIVE" },
+        take: 1,
+      },
     },
     orderBy: orderByClause,
     skip: (page - 1) * pageSize,
@@ -316,8 +320,7 @@ export default async function InventoryPage({
                       {fmt(weightedCost)}
                     </td>
                     <td className="py-4 px-4 text-right font-bold text-slate-950 dark:text-white">
-                      {/* Using cost basis + markup in demo layout */}
-                      {fmt(weightedCost * 1.35)}
+                      {v.listings[0]?.price ? fmt(v.listings[0].price) : "—"}
                     </td>
                     <td className="py-4 px-4 text-right font-bold text-slate-950 dark:text-white">
                       {recommended ? fmt(recommended) : "N/A"}

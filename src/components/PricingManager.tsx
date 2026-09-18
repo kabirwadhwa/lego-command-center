@@ -82,6 +82,11 @@ interface ProviderResultUI {
   status: "SUCCESS" | "NO_MATCHES" | "NOT_CONFIGURED" | "FAILED";
   error?: string;
   queriesAttempted?: string[];
+  diagnosticStatus?: string;
+  rawResultCount?: number;
+  acceptedResultCount?: number;
+  rejectedResultCount?: number;
+  rejectionReasonCounts?: Record<string, number>;
 }
 
 interface ResolvedProductUI {
@@ -612,37 +617,50 @@ export default function PricingManager({
               );
 
               const status = liveStatus?.status;
+              const diagStatus = liveStatus?.diagnosticStatus;
+
+              let badgeText = status || "READY";
+              let badgeStyle = "bg-slate-800/60 text-slate-500 border border-slate-700/60";
+
+              if (diagStatus === "LIVE_SUCCESS" || status === "SUCCESS") {
+                badgeText = "LIVE SUCCESS ✓";
+                badgeStyle = "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30";
+              } else if (diagStatus === "RESULTS_REJECTED") {
+                badgeText = "RESULTS REJECTED";
+                badgeStyle = "bg-amber-500/10 text-amber-400 border border-amber-500/30";
+              } else if (diagStatus === "LIVE_NO_MATCHES" || status === "NO_MATCHES") {
+                badgeText = "NO MATCHES";
+                badgeStyle = "bg-slate-800 text-slate-400 border border-slate-700";
+              } else if (diagStatus === "NOT_CONFIGURED" || status === "NOT_CONFIGURED") {
+                badgeText = "NOT CONFIGURED";
+                badgeStyle = "bg-amber-500/10 text-amber-400 border border-amber-500/30";
+              } else if (diagStatus === "AUTH_FAILED") {
+                badgeText = "AUTH FAILED ✕";
+                badgeStyle = "bg-rose-500/10 text-rose-400 border border-rose-500/30";
+              } else if (status === "FAILED") {
+                badgeText = "FAILED ✕";
+                badgeStyle = "bg-rose-500/10 text-rose-400 border border-rose-500/30";
+              }
+
+              let subtext = prov.defaultStatus;
+              if (liveStatus?.rawResultCount !== undefined && liveStatus.rawResultCount > 0) {
+                subtext = `Raw: ${liveStatus.rawResultCount} · Accepted: ${liveStatus.acceptedResultCount ?? 0} · Rej: ${liveStatus.rejectedResultCount ?? 0}`;
+              } else if (liveStatus?.error) {
+                subtext = "Error: " + liveStatus.error.slice(0, 30);
+              }
 
               return (
                 <div key={prov.id} className="bg-slate-900/80 border border-slate-800/80 rounded-lg p-2.5 flex items-center justify-between">
                   <div className="truncate mr-2">
                     <span className="text-xs font-bold text-slate-200 block truncate">{prov.name}</span>
-                    <span className="text-[10px] text-slate-500 truncate block">
-                      {liveStatus?.error ? "Error: " + liveStatus.error.slice(0, 20) + "..." : prov.defaultStatus}
+                    <span className="text-[10px] text-slate-400 truncate block">
+                      {subtext}
                     </span>
                   </div>
-                  <div>
-                    {status === "SUCCESS" ? (
-                      <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                        SUCCESS ✓
-                      </span>
-                    ) : status === "NO_MATCHES" ? (
-                      <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-slate-800 text-slate-400 border border-slate-700">
-                        NO MATCHES
-                      </span>
-                    ) : status === "NOT_CONFIGURED" ? (
-                      <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30">
-                        NOT CONFIGURED
-                      </span>
-                    ) : status === "FAILED" ? (
-                      <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-rose-500/10 text-rose-400 border border-rose-500/30">
-                        FAILED ✕
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-slate-800/60 text-slate-500 border border-slate-700/60">
-                        READY
-                      </span>
-                    )}
+                  <div className="shrink-0">
+                    <span className={`px-2 py-0.5 rounded text-[9px] font-bold ${badgeStyle}`}>
+                      {badgeText}
+                    </span>
                   </div>
                 </div>
               );

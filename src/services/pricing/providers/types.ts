@@ -25,6 +25,25 @@ export interface MarketEvidence {
   rawMetadata?: Record<string, unknown>;
 }
 
+export type CatawikiDiagnosticStatus =
+  | "LIVE_SUCCESS"
+  | "LIVE_NO_MATCHES"
+  | "NOT_CONFIGURED"
+  | "AUTH_FAILED"
+  | "PROVIDER_FAILED"
+  | "TIMEOUT"
+  | "PARSE_FAILED"
+  | "RESULTS_REJECTED";
+
+export type CatawikiRejectionReason =
+  | "IDENTIFIER_MISMATCH"
+  | "INVALID_PRICE"
+  | "INVALID_URL"
+  | "CURRENCY_UNSUPPORTED"
+  | "DUPLICATE"
+  | "MISSING_REQUIRED_DATA"
+  | "CONDITION_MISMATCH";
+
 export interface ProviderResult {
   providerId: string;
   providerName: string;
@@ -32,6 +51,12 @@ export interface ProviderResult {
   evidence: MarketEvidence[];
   error?: string;
   queriesAttempted?: string[];
+  diagnosticStatus?: CatawikiDiagnosticStatus | string;
+  rawResultCount?: number;
+  acceptedResultCount?: number;
+  rejectedResultCount?: number;
+  rejectionReasonCounts?: Record<string, number>;
+  telemetry?: Record<string, unknown>;
 }
 
 export interface IMarketResearchProvider {

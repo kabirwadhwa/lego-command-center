@@ -842,5 +842,84 @@ export async function addManualLegoStockAction(params: {
   }
 }
 
+/**
+ * Safe diagnostic action for evaluating live Catawiki integration.
+ * ADMIN ONLY. Never returns secrets or credentials.
+ */
+export async function testCatawikiDiagnosticsAction(identifier: string) {
+  await checkRole([UserRole.ADMIN]);
+
+  const cleanId = (identifier || "10316").trim();
+
+  try {
+    const { ProductIdentificationService } = await import("@/services/catalog/productIdentificationService");
+    const resolved = await ProductIdentificationService.resolveProduct(cleanId);
+
+    const { CatawikiScraperService } = await import("@/services/scraper/catawikiScraper");
+    const { lots, telemetry } = await CatawikiScraperService.fetchMarketObservationsWithTelemetry({
+      identifier: resolved.canonicalIdentifier || cleanId,
+      productName: resolved.name,
+      identifierType: resolved.identifierType,
+    });
+
+    const sampleAcceptedResults = lots.slice(0, 5).map(lot => ({
+      title: lot.title,
+      price: lot.price,
+      priceType: lot.priceType,
+      capturedDate: lot.capturedAt.toISOString(),
+      catawikiUrl: lot.externalUrl || "",
+      provenance: lot.provenance,
+    }));
+
+    return {
+      success: true as const,
+      diagnostics: {
+        configured: telemetry.configured,
+        provider: telemetry.provider,
+        actor: telemetry.actor,
+        requestExecuted: telemetry.requestExecuted,
+        requestSuccessful: telemetry.requestSuccessful,
+        responseStatus: telemetry.responseStatus,
+        query: cleanId,
+        queriesAttempted: telemetry.queriesAttempted,
+        rawResultCount: telemetry.rawResultCount,
+        acceptedResultCount: telemetry.acceptedResultCount,
+        rejectedResultCount: telemetry.rejectedResultCount,
+        rejectionReasonCounts: telemetry.rejectionReasonCounts,
+        rejectionDetails: telemetry.rejectionDetails?.slice(0, 10),
+        durationMs: telemetry.durationMs,
+        status: telemetry.status,
+        errorCode: telemetry.errorCode,
+        errorMessage: telemetry.errorMessage,
+        sampleAcceptedResults,
+      },
+    };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return {
+      success: false as const,
+      error: errorMsg,
+      diagnostics: {
+        configured: Boolean(process.env.APIFY_API_TOKEN),
+        provider: "catawiki",
+        actor: process.env.APIFY_ACTOR_ID || "saswave~catawiki-scraper",
+        requestExecuted: false,
+        requestSuccessful: false,
+        responseStatus: null,
+        query: cleanId,
+        queriesAttempted: [],
+        rawResultCount: 0,
+        acceptedResultCount: 0,
+        rejectedResultCount: 0,
+        rejectionReasonCounts: {},
+        durationMs: 0,
+        status: "PROVIDER_FAILED" as const,
+        errorCode: "DIAGNOSTIC_EXCEPTION",
+        errorMessage: errorMsg,
+      },
+    };
+  }
+}
+
 
 

@@ -6,7 +6,6 @@ import {
 } from "@/services/pricing/evidenceEligibility";
 import { CatawikiScraperService, RawApifyLotItem } from "@/services/scraper/catawikiScraper";
 import { PriceEngineService } from "@/services/pricing/priceEngineService";
-import { MarketResearchService } from "@/services/pricing/marketResearchService";
 import { ObservationProvenance, PriceType } from "@prisma/client";
 
 describe("Anti-Simulation Data-Integrity Invariant Suite", () => {

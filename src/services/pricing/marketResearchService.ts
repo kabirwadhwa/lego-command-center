@@ -165,7 +165,24 @@ export class MarketResearchService {
       where: { setNumber: metadata.setNumber },
     });
 
-    if (existing) return existing;
+    if (existing) {
+      if (
+        (existing.name === "Product metadata unavailable" || existing.name === "Unknown") &&
+        metadata.name &&
+        metadata.name !== "Product metadata unavailable"
+      ) {
+        return await prisma.product.update({
+          where: { id: existing.id },
+          data: {
+            name: metadata.name,
+            theme: metadata.theme || existing.theme,
+            imageUrl: metadata.imageUrl || existing.imageUrl,
+            productType: metadata.productType || existing.productType,
+          },
+        });
+      }
+      return existing;
+    }
 
     return await prisma.product.create({
       data: {

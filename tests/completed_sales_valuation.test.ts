@@ -1,5 +1,11 @@
 import { PriceType } from "@prisma/client";
-import { CatawikiScraperService, RawApifyLotItem } from "@/services/scraper/catawikiScraper";
+import {
+  CatawikiScraperService,
+  RawApifyLotItem,
+  isCompletedLot,
+  extractCompletedSalePrice,
+  extractActiveAuctionBid,
+} from "@/services/scraper/catawikiScraper";
 import { isValuationEligibleEvidence } from "@/services/pricing/evidenceEligibility";
 import { PriceEngineService } from "@/services/pricing/priceEngineService";
 import { ProductIdentificationService } from "@/services/catalog/productIdentificationService";
@@ -156,6 +162,150 @@ describe("Completed Sales Valuation & Catawiki Truthfulness Rules", () => {
       expect(metrics.min).toBe(35);
       expect(metrics.max).toBe(36);
       expect(metrics.sampleSize).toBe(2);
+    });
+  });
+
+  describe("5. Dedicated Normalizers: extractCompletedSalePrice vs extractActiveAuctionBid", () => {
+    test("extractCompletedSalePrice extracts winning bid for closed & sold lot", () => {
+      const lot: RawApifyLotItem = {
+        id: 104874135,
+        title: "LEGO Set - 75192 - Star Wars - New Sealed UCS Falcon",
+        sold: true,
+        closed: true,
+        status: "closed",
+        closeStatus: "Closed",
+        currentBidEUR: 700,
+        bidHistory: [{ amount: 700 }],
+      };
+
+      expect(isCompletedLot(lot)).toBe(true);
+      expect(extractCompletedSalePrice(lot)).toBe(700);
+      expect(extractActiveAuctionBid(lot)).toBeNull();
+    });
+
+    test("extractActiveAuctionBid extracts current bid for open/active auction and extractCompletedSalePrice returns null", () => {
+      const activeLot: RawApifyLotItem = {
+        id: 106751820,
+        title: "Lego Set - 10281 - Creator Expert - Bonsai Tree",
+        sold: false,
+        closed: false,
+        status: "closes_today",
+        closeStatus: "Open",
+        currentBidEUR: 32,
+      };
+
+      expect(isCompletedLot(activeLot)).toBe(false);
+      expect(extractCompletedSalePrice(activeLot)).toBeNull();
+      expect(extractActiveAuctionBid(activeLot)).toBe(32);
+    });
+
+    test("Closed lot without sale (unsold/reserve not met) is rejected from completed sales", () => {
+      const unsoldLot: RawApifyLotItem = {
+        id: 999999,
+        title: "LEGO Set 75192 Star Wars Falcon",
+        sold: false,
+        closed: true,
+        status: "closed",
+        closeStatus: "Closed",
+        currentBidEUR: 400,
+      };
+
+      const parsed = CatawikiScraperService.parseApifyDatasetWithTelemetry([unsoldLot], "75192");
+      expect(parsed.acceptedCount).toBe(0);
+      expect(parsed.rejectedCount).toBe(1);
+      expect(parsed.rejectionReasonCounts.NOT_COMPLETED_SALE).toBe(1);
+    });
+  });
+
+  describe("6. Real 75192 Raw Catawiki Lots Parsing", () => {
+    test("Parses real 75192 completed lots 104874135 (€700) and 105325498 (€490) as SOLD_PRICE", () => {
+      const lot700: RawApifyLotItem = {
+        id: 104874135,
+        title: "LEGO - Set - 75192 - Star Wars - New Sealed UCS Falcon - 2017-present",
+        url: "https://www.catawiki.com/en/l/104874135-lego-set-75192-star-wars-new-sealed-ucs-falcon",
+        sold: true,
+        closed: true,
+        status: "closed",
+        closeStatus: "Closed",
+        currentBidEUR: 700,
+        bidHistory: [{ amount: 700 }],
+        specs: {
+          Condition: "Unused",
+          Packaging: "in undamaged sealed original box",
+          "Complete set": "Yes",
+          "Serial number": "75192",
+        },
+        shippingRates: [{ region: "Germany", price: 7.5, currency: "EUR" }],
+      };
+
+      const lot490: RawApifyLotItem = {
+        id: 105325498,
+        title: "LEGO Set - 75192 - Star Wars - MILLENIUM FALCON - UCS",
+        url: "https://www.catawiki.com/en/l/105325498-lego-set-75192-star-wars-millenium-falcon-ucs",
+        sold: true,
+        closed: true,
+        status: "closed",
+        closeStatus: "Closed",
+        currentBidEUR: 490,
+        bidHistory: [{ amount: 490 }],
+        specs: {
+          Condition: "Used",
+          Packaging: "with manual in opened box",
+          "Complete set": "Yes",
+          "Serial number": "75192",
+        },
+        shippingRates: [{ region: "Germany", price: 35, currency: "EUR" }],
+      };
+
+      const parsed = CatawikiScraperService.parseApifyDatasetWithTelemetry([lot700, lot490], "75192");
+      expect(parsed.acceptedCount).toBe(2);
+      expect(parsed.completedLotsDetected).toBe(2);
+      expect(parsed.finalPricesExtracted).toBe(2);
+
+      const [p1, p2] = parsed.lots;
+      expect(p1.price).toBe(700);
+      expect(p1.priceType).toBe(PriceType.SOLD_PRICE);
+      expect(p1.condition).toBe("NEW_SEALED");
+      expect(p1.shippingCost).toBe(7.5);
+      expect(isValuationEligibleEvidence(p1)).toBe(true);
+
+      expect(p2.price).toBe(490);
+      expect(p2.priceType).toBe(PriceType.SOLD_PRICE);
+      expect(p2.condition).toBe("USED_COMPLETE");
+      expect(p2.shippingCost).toBe(35);
+      expect(isValuationEligibleEvidence(p2)).toBe(true);
+
+      // Price engine calculation on these two real completed sales:
+      const metrics = PriceEngineService.calculateMetrics([p1.price, p2.price], [p1.capturedAt, p2.capturedAt], [p1.priceType, p2.priceType]);
+      expect(metrics.median).toBe(595);
+      expect(metrics.min).toBe(490);
+      expect(metrics.max).toBe(700);
+      expect(metrics.confidenceTier).toBe("LOW");
+    });
+
+    test("Deduplicates lot IDs across different language locales (e.g. /en/l/ vs /es/l/)", () => {
+      const lotEn: RawApifyLotItem = {
+        id: 104874135,
+        title: "LEGO Set - 75192 - Star Wars - UCS Millennium Falcon",
+        url: "https://www.catawiki.com/en/l/104874135",
+        sold: true,
+        closed: true,
+        currentBidEUR: 700,
+      };
+
+      const lotEs: RawApifyLotItem = {
+        id: 104874135,
+        title: "Lego Set - 75192 - Star Wars - Halcón Milenario UCS",
+        url: "https://www.catawiki.com/es/l/104874135",
+        sold: true,
+        closed: true,
+        currentBidEUR: 700,
+      };
+
+      const parsed = CatawikiScraperService.parseApifyDatasetWithTelemetry([lotEn, lotEs], "75192");
+      expect(parsed.acceptedCount).toBe(1);
+      expect(parsed.rejectedCount).toBe(1);
+      expect(parsed.rejectionReasonCounts.DUPLICATE).toBe(1);
     });
   });
 });

@@ -42,7 +42,8 @@ export type CatawikiRejectionReason =
   | "CURRENCY_UNSUPPORTED"
   | "DUPLICATE"
   | "MISSING_REQUIRED_DATA"
-  | "CONDITION_MISMATCH";
+  | "CONDITION_MISMATCH"
+  | "NOT_COMPLETED_SALE";
 
 export interface ProviderResult {
   providerId: string;

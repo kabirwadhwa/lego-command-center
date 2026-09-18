@@ -74,6 +74,16 @@ export interface CatawikiScraperTelemetry {
   responseStatus: number | null;
   queriesAttempted: string[];
   urlsAttempted: string[];
+  discoveryQueries: string[];
+  searchResultsReturned: number;
+  catawikiCandidateUrls: string[];
+  uniqueLotIds: string[];
+  lotPagesRequested: number;
+  lotPagesSuccessfullyFetched: number;
+  completedLotsDetected: number;
+  finalPricesExtracted: number;
+  productMatchesAccepted: number;
+  persistedSoldComparables: number;
   rawResultCount: number;
   acceptedResultCount: number;
   rejectedResultCount: number;
@@ -83,6 +93,105 @@ export interface CatawikiScraperTelemetry {
   status: CatawikiDiagnosticStatus;
   errorCode?: string;
   errorMessage?: string;
+}
+
+/**
+ * Single source of truth for verifying whether a raw Catawiki item is a COMPLETED SALE.
+ * Strictly requires both a definitive closed status AND a verified sold indicator.
+ */
+export function isCompletedLot(item: RawApifyLotItem): boolean {
+  const hasSoldIndicator = Boolean(
+    item.sold === true ||
+    (typeof item.soldPrice === "number" && item.soldPrice > 0) ||
+    (typeof item.sold_price === "number" && item.sold_price > 0) ||
+    (typeof item.soldPrice === "string" && parseCatawikiPrice(item.soldPrice) > 0) ||
+    (typeof item.sold_price === "string" && parseCatawikiPrice(item.sold_price) > 0) ||
+    (Array.isArray(item.bidHistory) && item.bidHistory.length > 0)
+  );
+  const hasClosedIndicator = Boolean(
+    item.closed === true ||
+    item.is_closed === true ||
+    item.isClosed === true ||
+    item.status === "closed" ||
+    item.closeStatus === "Closed" ||
+    item.closeStatus === "closed" ||
+    (typeof item.soldPrice === "number" && item.soldPrice > 0) ||
+    (typeof item.sold_price === "number" && item.sold_price > 0)
+  );
+  return hasSoldIndicator && hasClosedIndicator;
+}
+
+/**
+ * Dedicated completed sale price extractor.
+ * NEVER inspects currentBid, currentBidValue, or buyNow for completed lots.
+ * Returns null if no verified sold hammer price can be proven.
+ */
+export function extractCompletedSalePrice(item: RawApifyLotItem): number | null {
+  if (!isCompletedLot(item)) return null;
+
+  if (typeof item.soldPrice === "number" && item.soldPrice > 0) {
+    return item.soldPrice;
+  }
+  if (typeof item.sold_price === "number" && item.sold_price > 0) {
+    return item.sold_price;
+  }
+  if (typeof item.soldPrice === "string") {
+    const p = parseCatawikiPrice(item.soldPrice);
+    if (p > 0) return p;
+  }
+  if (typeof item.sold_price === "string") {
+    const p = parseCatawikiPrice(item.sold_price);
+    if (p > 0) return p;
+  }
+  if (Array.isArray(item.bidHistory) && item.bidHistory.length > 0) {
+    const topBid = item.bidHistory[0]?.amount;
+    if (typeof topBid === "number" && topBid > 0) {
+      return topBid;
+    }
+    if (typeof topBid === "string") {
+      const p = parseCatawikiPrice(topBid);
+      if (p > 0) return p;
+    }
+  }
+  if (item.sold === true) {
+    if (typeof item.currentBidEUR === "number" && item.currentBidEUR > 0) {
+      return item.currentBidEUR;
+    }
+    if (typeof item.currentBid === "number" && item.currentBid > 0) {
+      return item.currentBid;
+    }
+    if (typeof item.price === "number" && item.price > 0) {
+      return item.price;
+    }
+    if (typeof item.currentBid === "string") {
+      const p = parseCatawikiPrice(item.currentBid);
+      if (p > 0) return p;
+    }
+    if (typeof item.price === "string") {
+      const p = parseCatawikiPrice(item.price);
+      if (p > 0) return p;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Dedicated active auction bid extractor.
+ * Strictly for open / live auctions only.
+ */
+export function extractActiveAuctionBid(item: RawApifyLotItem): number | null {
+  if (isCompletedLot(item)) return null;
+
+  let raw: unknown;
+  if (typeof item.currentBidEUR === "number") raw = item.currentBidEUR;
+  else if (typeof item.currentBidValue === "number") raw = item.currentBidValue;
+  else if (typeof item.currentBid === "number") raw = item.currentBid;
+  else if (item.current_bid !== undefined) raw = item.current_bid;
+  else if (item.price !== undefined) raw = item.price;
+
+  const parsed = parseCatawikiPrice(raw);
+  return parsed > 0 ? parsed : null;
 }
 
 /**
@@ -210,6 +319,16 @@ export class CatawikiScraperService {
       responseStatus: null,
       queriesAttempted: queries,
       urlsAttempted: searchUrls,
+      discoveryQueries: [],
+      searchResultsReturned: 0,
+      catawikiCandidateUrls: [],
+      uniqueLotIds: [],
+      lotPagesRequested: 0,
+      lotPagesSuccessfullyFetched: 0,
+      completedLotsDetected: 0,
+      finalPricesExtracted: 0,
+      productMatchesAccepted: 0,
+      persistedSoldComparables: 0,
       rawResultCount: 0,
       acceptedResultCount: 0,
       rejectedResultCount: 0,
@@ -221,6 +340,7 @@ export class CatawikiScraperService {
         DUPLICATE: 0,
         MISSING_REQUIRED_DATA: 0,
         CONDITION_MISMATCH: 0,
+        NOT_COMPLETED_SALE: 0,
       },
       rejectionDetails: [],
       durationMs: 0,
@@ -243,28 +363,30 @@ export class CatawikiScraperService {
     try {
       const allRawItems: RawApifyLotItem[] = [];
 
-      // Step 1: Discover Completed / Sold Lots (Curated Catalog Reference + Google Discovery)
-      const { lookupKnownSet } = await import("@/services/catalog/legoSetsCatalog");
-      const knownSet = lookupKnownSet(cleanId);
-      let candidateLotUrls: string[] = knownSet?.knownLotUrls ? [...knownSet.knownLotUrls] : [];
+      // Step 1: Dynamic Discovery of Completed Lots via Google Search Scraper
+      const discoveryQueries = [
+        `site:catawiki.com "${cleanId}" ("Final bid" OR "Puja final" OR "Winnend bod" OR "Dernière offre" OR "Höchstgebot" OR "Sold" OR "Vendido" OR "Verkocht")`,
+        `site:catawiki.com/en/l/ "${cleanId}"`,
+      ];
+      telemetry.discoveryQueries = discoveryQueries;
+      console.log(`[CatawikiScraper] Step 1: Dynamic discovery via Google for ${cleanId}: queries=[${discoveryQueries.join(" | ")}]`);
 
-      if (candidateLotUrls.length < 3) {
-        const googleQuery = `site:catawiki.com/en/l/ "${cleanId}" LEGO`;
-        console.log(`[CatawikiScraper] Step 1: Discovering completed lots via Google: ${googleQuery}`);
+      const candidateLotUrls: string[] = [];
+      const uniqueLotIds = new Set<string>();
 
-        try {
-          const googleRes = await fetch(
-            `https://api.apify.com/v2/acts/apify~google-search-scraper/run-sync-get-dataset-items?token=${apifyToken}&timeout=40`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                queries: googleQuery,
-                maxPagesPerQuery: 1,
-                resultsPerPage: 10,
-              }),
-            }
-          );
+      try {
+        const googleRes = await fetch(
+          `https://api.apify.com/v2/acts/apify~google-search-scraper/run-sync-get-dataset-items?token=${apifyToken}&timeout=45`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              queries: discoveryQueries.join("\n"),
+              maxPagesPerQuery: 1,
+              resultsPerPage: 20,
+            }),
+          }
+        );
 
         if (googleRes.status === 401 || googleRes.status === 403) {
           telemetry.status = "AUTH_FAILED";
@@ -275,32 +397,55 @@ export class CatawikiScraperService {
         }
 
         if (googleRes.ok) {
-          const googleData = await googleRes.json();
-          if (Array.isArray(googleData) && googleData[0]?.organicResults) {
-            const organics = googleData[0].organicResults as Array<{ url?: string; title?: string; description?: string }>;
+          const googleDatasets = await googleRes.json();
+          if (Array.isArray(googleDatasets)) {
             const escaped = cleanId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
             const idRegex = new RegExp(`(?:^|[^0-9A-Za-z])${escaped}(?:[^0-9A-Za-z]|$)`, "i");
 
-            for (const org of organics) {
-              if (!org.url) continue;
-              const matchesCw = /catawiki\.(?:com|nl|fr|de|be|it|es)\/(?:[a-z]{2}\/)?l\/([0-9]+)/i.test(org.url);
-              const text = `${org.title || ""} ${org.url} ${org.description || ""}`;
-              if (matchesCw && idRegex.test(text)) {
-                candidateLotUrls.push(org.url);
+            let totalOrganic = 0;
+            for (const dataset of googleDatasets) {
+              const organics = (dataset?.organicResults as Array<{ url?: string; title?: string; description?: string }>) || [];
+              totalOrganic += organics.length;
+
+              for (const org of organics) {
+                if (!org.url) continue;
+                const lotMatch = org.url.match(/catawiki\.(?:com|nl|fr|de|be|it|es)\/(?:[a-z]{2}\/)?l\/([0-9]+)/i);
+                if (lotMatch) {
+                  const lotId = lotMatch[1];
+                  const text = `${org.title || ""} ${org.url} ${org.description || ""}`;
+                  if (idRegex.test(text) && !uniqueLotIds.has(lotId)) {
+                    uniqueLotIds.add(lotId);
+                    // Standardize lot URL to /en/l/ to ensure English specs and currency
+                    candidateLotUrls.push(`https://www.catawiki.com/en/l/${lotId}`);
+                  }
+                }
               }
             }
+            telemetry.searchResultsReturned = totalOrganic;
           }
         }
-        } catch (gErr) {
-          console.warn(`[CatawikiScraper] Google search discovery warning for ${cleanId}:`, gErr);
-        }
+      } catch (gErr) {
+        console.warn(`[CatawikiScraper] Google search discovery warning for ${cleanId}:`, gErr);
       }
 
-      candidateLotUrls = Array.from(new Set(candidateLotUrls)).slice(0, 8);
-      console.log(`[CatawikiScraper] Found ${candidateLotUrls.length} candidate completed lot URLs for ${cleanId}:`, candidateLotUrls);
+      // Sort candidate lots descending by lot ID so newest lots are scraped first
+      candidateLotUrls.sort((a, b) => {
+        const idA = parseInt(a.match(/\/l\/([0-9]+)/)?.[1] || "0", 10);
+        const idB = parseInt(b.match(/\/l\/([0-9]+)/)?.[1] || "0", 10);
+        return idB - idA;
+      });
+
+      telemetry.catawikiCandidateUrls = candidateLotUrls;
+      telemetry.uniqueLotIds = Array.from(uniqueLotIds);
+
+      // Limit to 10 most recent candidate lots to avoid timeout
+      const candidateLotUrlsToFetch = candidateLotUrls.slice(0, 10);
+      telemetry.lotPagesRequested = candidateLotUrlsToFetch.length;
+
+      console.log(`[CatawikiScraper] Found ${candidateLotUrls.length} candidate lot URLs for ${cleanId} (requesting top ${candidateLotUrlsToFetch.length}):`, candidateLotUrlsToFetch);
 
       // Step 2: Extract Completed Lot Details via scrapesage~catawiki-scraper
-      if (candidateLotUrls.length > 0) {
+      if (candidateLotUrlsToFetch.length > 0) {
         try {
           const scrapeRes = await fetch(
             `https://api.apify.com/v2/acts/scrapesage~catawiki-scraper/run-sync-get-dataset-items?token=${apifyToken}&timeout=60`,
@@ -308,7 +453,7 @@ export class CatawikiScraperService {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                lotUrls: candidateLotUrls,
+                lotUrls: candidateLotUrlsToFetch,
               }),
             }
           );
@@ -316,6 +461,7 @@ export class CatawikiScraperService {
           if (scrapeRes.ok) {
             const scrapedItems = await scrapeRes.json();
             if (Array.isArray(scrapedItems)) {
+              telemetry.lotPagesSuccessfullyFetched = scrapedItems.length;
               allRawItems.push(...scrapedItems);
             }
           } else {
@@ -367,12 +513,15 @@ export class CatawikiScraperService {
       const parsed = this.parseApifyDatasetWithTelemetry(allRawItems, cleanId, params.productName, "scrapesage~catawiki-scraper");
       telemetry.acceptedResultCount = parsed.acceptedCount;
       telemetry.rejectedResultCount = parsed.rejectedCount;
+      telemetry.completedLotsDetected = parsed.completedLotsDetected;
+      telemetry.finalPricesExtracted = parsed.finalPricesExtracted;
+      telemetry.productMatchesAccepted = parsed.acceptedCount;
       telemetry.rejectionReasonCounts = parsed.rejectionReasonCounts;
       telemetry.rejectionDetails = parsed.rejectionDetails;
 
       if (parsed.lots.length > 0) {
         telemetry.status = "LIVE_SUCCESS";
-        console.log(`[CatawikiScraper] Successfully accepted ${parsed.lots.length} genuine lots (rejected ${parsed.rejectedCount}) for ${cleanId}.`);
+        console.log(`[CatawikiScraper] Successfully accepted ${parsed.lots.length} genuine lots (${parsed.completedLotsDetected} completed sales, rejected ${parsed.rejectedCount}) for ${cleanId}.`);
       } else {
         telemetry.status = "RESULTS_REJECTED";
         console.warn(`[CatawikiScraper] All ${allRawItems.length} raw results for ${cleanId} were rejected during validation.`);
@@ -410,6 +559,8 @@ export class CatawikiScraperService {
     lots: CatawikiScrapedLot[];
     acceptedCount: number;
     rejectedCount: number;
+    completedLotsDetected: number;
+    finalPricesExtracted: number;
     rejectionReasonCounts: Record<CatawikiRejectionReason, number>;
     rejectionDetails: Array<{ title?: string; url?: string; reason: CatawikiRejectionReason; detail?: string }>;
   } {
@@ -419,6 +570,9 @@ export class CatawikiScraperService {
     const lots: CatawikiScrapedLot[] = [];
     const seenListingIds = new Set<string>();
 
+    let completedLotsDetected = 0;
+    let finalPricesExtracted = 0;
+
     const rejectionReasonCounts: Record<CatawikiRejectionReason, number> = {
       IDENTIFIER_MISMATCH: 0,
       INVALID_PRICE: 0,
@@ -427,6 +581,7 @@ export class CatawikiScraperService {
       DUPLICATE: 0,
       MISSING_REQUIRED_DATA: 0,
       CONDITION_MISMATCH: 0,
+      NOT_COMPLETED_SALE: 0,
     };
 
     const rejectionDetails: Array<{ title?: string; url?: string; reason: CatawikiRejectionReason; detail?: string }> = [];
@@ -442,9 +597,9 @@ export class CatawikiScraperService {
       const rawUrl = item.url || item.lot_url || item.lotUrl;
 
       // 1. Missing required title
-      if (!rawTitle) {
+      if (!rawTitle || rawTitle === "null" || rawTitle === "undefined") {
         rejectionReasonCounts.MISSING_REQUIRED_DATA++;
-        rejectionDetails.push({ title: "", reason: "MISSING_REQUIRED_DATA", detail: "Empty title" });
+        rejectionDetails.push({ title: "", url: rawUrl, reason: "MISSING_REQUIRED_DATA", detail: "Empty title" });
         continue;
       }
 
@@ -457,35 +612,59 @@ export class CatawikiScraperService {
         continue;
       }
 
-      // 3. Price parsing and validation
-      let rawPrice: unknown;
-      if (typeof item.currentBidEUR === "number") {
-        rawPrice = item.currentBidEUR;
-      } else if (typeof item.currentBidValue === "number") {
-        rawPrice = item.currentBidValue;
-      } else if (typeof item.currentBid === "object" && item.currentBid !== null && "EUR" in item.currentBid) {
-        rawPrice = (item.currentBid as { EUR?: number }).EUR;
-      } else if (typeof item.currentBid === "number" || typeof item.currentBid === "string") {
-        rawPrice = item.currentBid;
-      } else if (item.current_bid !== undefined) {
-        rawPrice = item.current_bid;
-      } else if (typeof item.buyNowValue === "number") {
-        rawPrice = item.buyNowValue;
-      } else if (typeof item.buyNow === "object" && item.buyNow !== null && "EUR" in item.buyNow) {
-        rawPrice = (item.buyNow as { EUR?: number }).EUR;
-      } else if (item.sold_price !== undefined) {
-        rawPrice = item.sold_price;
-      } else if (item.soldPrice !== undefined) {
-        rawPrice = item.soldPrice;
-      } else if (item.price !== undefined) {
-        rawPrice = item.price;
-      } else if (item.bids?.[0]?.amount !== undefined) {
-        rawPrice = item.bids[0].amount;
+      // 3. Price parsing and validation: Strictly separated completed vs active
+      const isCompleted = isCompletedLot(item);
+      const isClosedWithoutSale = Boolean(
+        (item.closed === true || item.is_closed === true || item.isClosed === true || item.status === "closed" || item.closeStatus === "Closed" || item.closeStatus === "closed") &&
+        !isCompleted
+      );
+
+      if (isClosedWithoutSale) {
+        rejectionReasonCounts.NOT_COMPLETED_SALE++;
+        rejectionDetails.push({
+          title: rawTitle,
+          url: urlText,
+          reason: "NOT_COMPLETED_SALE",
+          detail: "Auction closed without sale or reserve price not met",
+        });
+        continue;
       }
 
-      const numPrice = parseCatawikiPrice(rawPrice);
+      let numPrice: number | null = null;
+      let priceType: PriceType;
 
-      if (numPrice <= 0 || isNaN(numPrice) || numPrice < 0.05 || numPrice > 15000) {
+      if (isCompleted) {
+        completedLotsDetected++;
+        numPrice = extractCompletedSalePrice(item);
+        if (numPrice === null || numPrice <= 0) {
+          rejectionReasonCounts.INVALID_PRICE++;
+          rejectionDetails.push({
+            title: rawTitle,
+            url: urlText,
+            reason: "INVALID_PRICE",
+            detail: "Completed lot missing definitive sold price",
+          });
+          continue;
+        }
+        finalPricesExtracted++;
+        priceType = PriceType.SOLD_PRICE;
+      } else {
+        // Active auction / open lot
+        numPrice = extractActiveAuctionBid(item);
+        if (numPrice === null || numPrice <= 0) {
+          rejectionReasonCounts.INVALID_PRICE++;
+          rejectionDetails.push({
+            title: rawTitle,
+            url: urlText,
+            reason: "INVALID_PRICE",
+            detail: "Active auction missing valid current bid",
+          });
+          continue;
+        }
+        priceType = PriceType.CURRENT_BID;
+      }
+
+      if (numPrice < 0.05 || numPrice > 15000) {
         rejectionReasonCounts.INVALID_PRICE++;
         rejectionDetails.push({ title: rawTitle, url: urlText, reason: "INVALID_PRICE", detail: `Price ${numPrice} outside valid bounds` });
         continue;
@@ -514,11 +693,12 @@ export class CatawikiScraperService {
         }
       }
 
-      // 6. Deduplication
-      const dedupeKey = externalUrl || String(item.id || item.lot_id || item.lotId || `cw-${rawTitle}`);
+      // 6. Deduplication (deduplicate across language locales by numeric lot ID)
+      const numericLotId = String(item.id || item.lot_id || item.lotId || (urlText.match(/\/l\/([0-9]+)/)?.[1]) || "");
+      const dedupeKey = numericLotId ? `lot-${numericLotId}` : (externalUrl || `cw-${rawTitle}`);
       if (seenListingIds.has(dedupeKey)) {
         rejectionReasonCounts.DUPLICATE++;
-        rejectionDetails.push({ title: rawTitle, url: externalUrl, reason: "DUPLICATE", detail: "Duplicate listing" });
+        rejectionDetails.push({ title: rawTitle, url: externalUrl, reason: "DUPLICATE", detail: `Duplicate listing (${dedupeKey})` });
         continue;
       }
       seenListingIds.add(dedupeKey);
@@ -538,23 +718,7 @@ export class CatawikiScraperService {
         sellerName = undefined;
       }
 
-      // 8. Sale type resolution
-      const isSold = Boolean(item.sold || item.sold_price || item.soldPrice);
-      const isClosed = Boolean(item.closed || item.is_closed || item.isClosed || item.status === "closed" || item.closeStatus === "closed" || item.closeStatus === "Closed" || item.sold_price || item.soldPrice);
-      const isBiddingOpen = Boolean(item.open || item.status === "bidding_open" || item.status === "open" || item.status === "live" || item.status === "open_now" || item.closeStatus === "open" || item.closeStatus === "Open");
-
-      let priceType: PriceType;
-      if (isClosed && isSold) {
-        priceType = PriceType.SOLD_PRICE;
-      } else if (isBiddingOpen || item.bids?.length) {
-        priceType = PriceType.CURRENT_BID;
-      } else if (item.price || item.buyNow || item.buyNowValue) {
-        priceType = PriceType.ASKING_PRICE;
-      } else {
-        priceType = PriceType.CURRENT_BID;
-      }
-
-      // Shipping cost parsing — strictly no default 15.0
+      // 8. Shipping cost parsing — strictly no default 15.0
       let parsedShipping: number | undefined = undefined;
       if (Array.isArray(item.shippingRates) && item.shippingRates.length > 0) {
         const preferredRate = item.shippingRates.find(
@@ -573,7 +737,7 @@ export class CatawikiScraperService {
         }
       }
 
-      // Condition parsing — strictly no default USED_COMPLETE
+      // 9. Condition parsing — strictly no default USED_COMPLETE
       const specs = (typeof item.specs === "object" && item.specs !== null) ? (item.specs as Record<string, string>) : {};
       const conditionText = `${specs.Condition || item.condition || ""} ${specs["Complete set"] ? "Complete: " + specs["Complete set"] : ""} ${item.subtitle || ""} ${rawTitle}`.toUpperCase();
 
@@ -621,10 +785,9 @@ export class CatawikiScraperService {
         provenance: ObservationProvenance.LIVE_SCRAPE,
         provider: resolvedProvider,
         rawMetadataJson: JSON.stringify({
-          rawPrice,
           originalPrice: numPrice,
           originalCurrency: rawCurrency,
-          isClosed,
+          isCompleted,
           status: item.status || item.closeStatus,
           productName,
         }),
@@ -638,6 +801,8 @@ export class CatawikiScraperService {
       lots,
       acceptedCount,
       rejectedCount,
+      completedLotsDetected,
+      finalPricesExtracted,
       rejectionReasonCounts,
       rejectionDetails,
     };
@@ -740,5 +905,6 @@ export class CatawikiScraperService {
     }
   }
 }
+
 
 

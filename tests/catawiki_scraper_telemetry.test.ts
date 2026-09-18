@@ -134,6 +134,41 @@ describe("Catawiki Scraper Telemetry, Query Construction & Rejection Tracking", 
       expect(lot2.price).toBe(400);
       expect(lot2.priceType).toBe(PriceType.SOLD_PRICE);
     });
+
+    it("Parses solidcode actor output with currentBidValue, sellerShopName, and proper attribution", () => {
+      const solidCodeItem: RawApifyLotItem = {
+        id: 106849337,
+        title: "LEGO Set - 42115 - Technic - Lamborghini Sián FKP 37",
+        subtitle: "Mint - in sealed box",
+        url: "https://www.catawiki.com/en/l/106849337-lego-set-42115-technic-lamborghini-sian-fkp-37",
+        currentBid: { EUR: 200, USD: 231, GBP: 171 },
+        currentBidValue: 200,
+        currentBidCurrency: "EUR",
+        sellerShopName: "Best_Seller_Ever!",
+        biddingEndTime: "2026-09-29T19:09:40Z",
+        closeStatus: "open",
+      };
+
+      const parsed = CatawikiScraperService.parseApifyDatasetWithTelemetry(
+        [solidCodeItem],
+        "42115",
+        "Lamborghini Sian",
+        "solidcode~catawiki-scraper"
+      );
+
+      expect(parsed.acceptedCount).toBe(1);
+      expect(parsed.rejectedCount).toBe(0);
+      expect(parsed.lots.length).toBe(1);
+
+      const lot = parsed.lots[0];
+      expect(lot.price).toBe(200);
+      expect(lot.currency).toBe("EUR");
+      expect(lot.priceType).toBe(PriceType.CURRENT_BID);
+      expect(lot.condition).toBe("NEW_SEALED");
+      expect(lot.seller).toBe("Best_Seller_Ever!");
+      expect(lot.provider).toBe("apify/solidcode/catawiki-scraper");
+      expect(lot.externalUrl).toBe("https://www.catawiki.com/en/l/106849337-lego-set-42115-technic-lamborghini-sian-fkp-37");
+    });
   });
 
   describe("4. Scraper Runtime Status Handling", () => {

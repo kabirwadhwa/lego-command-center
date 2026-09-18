@@ -16,13 +16,18 @@ import {
 
 describe("PriceEngineService & CatawikiScraperService", () => {
   const originalEnv = process.env.APP_MODE;
+  const originalApifyToken = process.env.APIFY_API_TOKEN;
 
   beforeAll(async () => {
-    // Setup test environment
+    // Setup test environment: ensure unit tests do not make live external API calls
+    delete process.env.APIFY_API_TOKEN;
   });
 
   afterAll(async () => {
     process.env.APP_MODE = originalEnv;
+    if (originalApifyToken) {
+      process.env.APIFY_API_TOKEN = originalApifyToken;
+    }
     await prisma.$disconnect();
   });
 

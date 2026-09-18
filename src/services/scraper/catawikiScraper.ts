@@ -12,8 +12,13 @@ export interface RawApifyLotItem {
   lotId?: string | number;
   title?: string;
   name?: string;
+  subtitle?: string;
   current_bid?: number | string;
-  currentBid?: number | string;
+  currentBid?: number | string | { EUR?: number; USD?: number; GBP?: number; [k: string]: unknown };
+  currentBidValue?: number | string;
+  currentBidCurrency?: string;
+  buyNow?: { EUR?: number; USD?: number; GBP?: number; [k: string]: unknown } | null;
+  buyNowValue?: number | string;
   sold_price?: number | string;
   soldPrice?: number | string;
   price?: number | string;
@@ -24,13 +29,19 @@ export interface RawApifyLotItem {
   shipping?: number | string;
   condition?: string;
   seller?: string | { name?: string; username?: string };
+  sellerShopName?: string;
+  sellerUserName?: string;
+  sellerCountry?: string;
   url?: string;
   lot_url?: string;
   lotUrl?: string;
   end_date?: string | number;
   endDate?: string | number;
+  biddingEndTime?: string | number;
+  biddingStartTime?: string | number;
   is_closed?: boolean;
   isClosed?: boolean;
+  closeStatus?: string;
   status?: string;
   captured_at?: string | number;
   capturedAt?: string | number;
@@ -178,7 +189,7 @@ export class CatawikiScraperService {
     maxItems?: number;
   }): Promise<{ lots: CatawikiScrapedLot[]; telemetry: CatawikiScraperTelemetry }> {
     const cleanId = params.identifier.trim();
-    const actorId = process.env.APIFY_ACTOR_ID || "saswave~catawiki-scraper";
+    const actorId = process.env.APIFY_ACTOR_ID || "solidcode~catawiki-scraper";
     const apifyToken = process.env.APIFY_API_TOKEN;
 
     const queries = params.queries && params.queries.length > 0
@@ -230,15 +241,24 @@ export class CatawikiScraperService {
     console.log(`[CatawikiScraper] provider=CATAWIKI actor=${actorId} query="${cleanId}" queries=[${queries.join(", ")}] request started`);
 
     try {
+      const isSolidCode = actorId.toLowerCase().includes("solidcode");
+      const requestBody = isSolidCode
+        ? {
+            searchQueries: queries,
+            maxResults: params.maxItems || 20,
+            language: "en",
+          }
+        : {
+            urls: searchUrls,
+            max_page: 1,
+          };
+
       const res = await fetch(
         `https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}/run-sync-get-dataset-items?token=${apifyToken}&timeout=90`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            urls: searchUrls,
-            max_page: 1,
-          }),
+          body: JSON.stringify(requestBody),
         }
       );
 
@@ -287,7 +307,7 @@ export class CatawikiScraperService {
         return { lots: [], telemetry };
       }
 
-      const parsed = this.parseApifyDatasetWithTelemetry(rawItems, cleanId, params.productName);
+      const parsed = this.parseApifyDatasetWithTelemetry(rawItems, cleanId, params.productName, actorId);
       telemetry.acceptedResultCount = parsed.acceptedCount;
       telemetry.rejectedResultCount = parsed.rejectedCount;
       telemetry.rejectionReasonCounts = parsed.rejectionReasonCounts;
@@ -327,7 +347,8 @@ export class CatawikiScraperService {
   static parseApifyDatasetWithTelemetry(
     items: RawApifyLotItem[],
     identifier: string,
-    productName?: string | null
+    productName?: string | null,
+    actorId?: string
   ): {
     lots: CatawikiScrapedLot[];
     acceptedCount: number;
@@ -374,7 +395,29 @@ export class CatawikiScraperService {
       }
 
       // 3. Price parsing and validation
-      const rawPrice = item.current_bid || item.currentBid || item.sold_price || item.soldPrice || item.price || item.bids?.[0]?.amount;
+      let rawPrice: unknown;
+      if (typeof item.currentBidValue === "number") {
+        rawPrice = item.currentBidValue;
+      } else if (typeof item.currentBid === "object" && item.currentBid !== null && "EUR" in item.currentBid) {
+        rawPrice = (item.currentBid as { EUR?: number }).EUR;
+      } else if (typeof item.currentBid === "number" || typeof item.currentBid === "string") {
+        rawPrice = item.currentBid;
+      } else if (item.current_bid !== undefined) {
+        rawPrice = item.current_bid;
+      } else if (typeof item.buyNowValue === "number") {
+        rawPrice = item.buyNowValue;
+      } else if (typeof item.buyNow === "object" && item.buyNow !== null && "EUR" in item.buyNow) {
+        rawPrice = (item.buyNow as { EUR?: number }).EUR;
+      } else if (item.sold_price !== undefined) {
+        rawPrice = item.sold_price;
+      } else if (item.soldPrice !== undefined) {
+        rawPrice = item.soldPrice;
+      } else if (item.price !== undefined) {
+        rawPrice = item.price;
+      } else if (item.bids?.[0]?.amount !== undefined) {
+        rawPrice = item.bids[0].amount;
+      }
+
       const numPrice = parseCatawikiPrice(rawPrice);
 
       if (numPrice <= 0 || isNaN(numPrice) || numPrice < 0.05 || numPrice > 15000) {
@@ -384,7 +427,7 @@ export class CatawikiScraperService {
       }
 
       // 4. Currency resolution and conversion
-      const rawCurrency = (item.currency ? String(item.currency).toUpperCase().trim() : "EUR");
+      const rawCurrency = String(item.currentBidCurrency || item.currency || "EUR").toUpperCase().trim();
       let normalizedEurPrice = numPrice;
 
       if (rawCurrency !== "EUR") {
@@ -417,7 +460,11 @@ export class CatawikiScraperService {
 
       // 7. Seller normalization
       let sellerName: string | undefined = undefined;
-      if (typeof item.seller === "object" && item.seller !== null && (item.seller.name || item.seller.username)) {
+      if (item.sellerShopName && String(item.sellerShopName).trim()) {
+        sellerName = String(item.sellerShopName).trim();
+      } else if (item.sellerUserName && String(item.sellerUserName).trim()) {
+        sellerName = String(item.sellerUserName).trim();
+      } else if (typeof item.seller === "object" && item.seller !== null && (item.seller.name || item.seller.username)) {
         sellerName = String(item.seller.name || item.seller.username).trim();
       } else if (typeof item.seller === "string" && item.seller.trim().length > 0) {
         sellerName = item.seller.trim();
@@ -427,15 +474,15 @@ export class CatawikiScraperService {
       }
 
       // 8. Sale type resolution
-      const isClosed = Boolean(item.is_closed || item.isClosed || item.status === "closed" || item.sold_price || item.soldPrice);
-      const isBiddingOpen = Boolean(item.status === "bidding_open" || item.status === "open" || item.status === "live" || item.current_bid || item.currentBid);
+      const isClosed = Boolean(item.is_closed || item.isClosed || item.status === "closed" || item.closeStatus === "closed" || item.sold_price || item.soldPrice);
+      const isBiddingOpen = Boolean(item.status === "bidding_open" || item.status === "open" || item.status === "live" || item.closeStatus === "open" || item.currentBidValue || item.current_bid || item.currentBid);
 
       let priceType: PriceType;
       if (isClosed && (item.sold_price || item.soldPrice)) {
         priceType = PriceType.SOLD_PRICE;
       } else if (isBiddingOpen || item.bids?.length) {
         priceType = PriceType.CURRENT_BID;
-      } else if (item.price) {
+      } else if (item.price || item.buyNow || item.buyNowValue) {
         priceType = PriceType.ASKING_PRICE;
       } else {
         priceType = PriceType.CURRENT_BID;
@@ -446,10 +493,18 @@ export class CatawikiScraperService {
       const parsedShipping = rawShipping !== undefined && rawShipping !== null ? parseCatawikiPrice(rawShipping) : 15.0;
 
       // Condition parsing
-      const conditionStr = String(item.condition || "").toUpperCase();
-      const condition = conditionStr.includes("SEALED") || conditionStr.includes("NEW") ? "NEW_SEALED" : "USED_COMPLETE";
+      const conditionText = `${item.condition || ""} ${item.subtitle || ""} ${rawTitle}`.toUpperCase();
+      const condition = conditionText.includes("SEALED") || conditionText.includes("MINT") || conditionText.includes("NEW") || conditionText.includes("UNUSED") ? "NEW_SEALED" : "USED_COMPLETE";
 
       const listingId = String(item.id || item.lot_id || item.lotId || (externalUrl ? `cw-${externalUrl}` : `cw-${Date.now()}-${lots.length}`));
+
+      const auctionEndDate = item.biddingEndTime || item.end_date || item.endDate;
+      const capturedDate = item.captured_at || item.capturedAt;
+
+      const effectiveActor = actorId || process.env.APIFY_ACTOR_ID || "solidcode~catawiki-scraper";
+      const resolvedProvider = effectiveActor.includes("~")
+        ? `apify/${effectiveActor.replace("~", "/")}`
+        : `apify/${effectiveActor}`;
 
       lots.push({
         externalListingId: listingId,
@@ -461,16 +516,16 @@ export class CatawikiScraperService {
         condition,
         seller: sellerName,
         externalUrl,
-        auctionEndAt: item.end_date || item.endDate ? new Date(item.end_date || item.endDate!) : undefined,
-        capturedAt: item.captured_at || item.capturedAt ? new Date(item.captured_at || item.capturedAt!) : new Date(),
+        auctionEndAt: auctionEndDate ? new Date(auctionEndDate) : undefined,
+        capturedAt: capturedDate ? new Date(capturedDate) : new Date(),
         provenance: ObservationProvenance.LIVE_SCRAPE,
-        provider: "apify/saswave/catawiki-scraper",
+        provider: resolvedProvider,
         rawMetadataJson: JSON.stringify({
           rawPrice,
           originalPrice: numPrice,
           originalCurrency: rawCurrency,
           isClosed,
-          status: item.status,
+          status: item.status || item.closeStatus,
           productName,
         }),
       });

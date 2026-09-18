@@ -108,9 +108,14 @@ export class ProductIdentificationService {
     // 2. Check for EAN / GTIN (12 or 13 digits)
     if (/^[0-9]{12,13}$/.test(rawTrimmed)) {
       // Check if this EAN exists in local Product table
-      const dbProductByEan = await prisma.product.findFirst({
-        where: { ean: rawTrimmed },
-      });
+      let dbProductByEan = null;
+      try {
+        dbProductByEan = await prisma.product.findFirst({
+          where: { ean: rawTrimmed },
+        });
+      } catch {
+        // Database not reachable or offline; proceed
+      }
 
       if (dbProductByEan) {
         sources.push({ source: "Local Product Catalog", matchedIdentifier: rawTrimmed, confidence: 1.0 });
@@ -145,10 +150,15 @@ export class ProductIdentificationService {
 
     // 3. Check for Internal SKU in ProductVariant
     if (isExplicitSku || upperRaw.startsWith("LGO-")) {
-      const variant = await prisma.productVariant.findUnique({
-        where: { sku: upperRaw },
-        include: { product: true },
-      });
+      let variant = null;
+      try {
+        variant = await prisma.productVariant.findUnique({
+          where: { sku: upperRaw },
+          include: { product: true },
+        });
+      } catch {
+        // Database not reachable or offline; proceed
+      }
 
       if (variant) {
         sources.push({ source: "Inventory Ledger SKU", matchedIdentifier: variant.sku, confidence: 1.0 });
@@ -189,9 +199,14 @@ export class ProductIdentificationService {
     }
 
     // 5. Check Local Database Product Table
-    const dbProduct = await prisma.product.findUnique({
-      where: { setNumber: normalized },
-    });
+    let dbProduct = null;
+    try {
+      dbProduct = await prisma.product.findUnique({
+        where: { setNumber: normalized },
+      });
+    } catch {
+      // Database not reachable or offline; proceed
+    }
 
     if (dbProduct) {
       const isPartType = dbProduct.productType === "LEGO_PART";
@@ -210,7 +225,25 @@ export class ProductIdentificationService {
       };
     }
 
-    // 6. Check Inventory Seed Catalog
+    // 6. Check Curated Known LEGO Sets Reference (deterministic resolution for sets like 21006, 21036, 75192)
+    const setDef = lookupKnownSet(normalized);
+    if (setDef && !isExplicitPart) {
+      sources.push({ source: "Curated LEGO Sets Catalog", matchedIdentifier: setDef.setNumber, confidence: 0.98 });
+      return {
+        input: rawTrimmed,
+        identifierType: "LEGO_SET",
+        canonicalIdentifier: setDef.setNumber,
+        name: setDef.name,
+        theme: setDef.theme,
+        year: setDef.year || null,
+        imageUrl: setDef.imageUrl || null,
+        ean: null,
+        identificationSources: sources,
+        identificationConfidence: 0.98,
+      };
+    }
+
+    // 6.5 Check Inventory Seed Catalog
     const seedCatalog = getSeedCatalog();
     const seedItem = seedCatalog.get(normalized);
     if (seedItem && !isExplicitPart) {
@@ -226,24 +259,6 @@ export class ProductIdentificationService {
         ean: null,
         identificationSources: sources,
         identificationConfidence: 0.92,
-      };
-    }
-
-    // 6.5 Check Curated Known LEGO Sets Reference (deterministic resolution for sets like 21006, 21036, 75192)
-    const setDef = lookupKnownSet(normalized);
-    if (setDef && !isExplicitPart) {
-      sources.push({ source: "Curated LEGO Sets Catalog", matchedIdentifier: setDef.setNumber, confidence: 0.98 });
-      return {
-        input: rawTrimmed,
-        identifierType: "LEGO_SET",
-        canonicalIdentifier: setDef.setNumber,
-        name: setDef.name,
-        theme: setDef.theme,
-        year: setDef.year || null,
-        imageUrl: setDef.imageUrl || null,
-        ean: null,
-        identificationSources: sources,
-        identificationConfidence: 0.98,
       };
     }
 
@@ -357,10 +372,15 @@ export class ProductIdentificationService {
     }
 
     // 9. Textual Product Name Search in Local Catalog
-    const matchingProducts = await prisma.product.findMany({
-      where: { name: { contains: rawTrimmed, mode: "insensitive" } },
-      take: 1,
-    });
+    let matchingProducts: Array<typeof prisma.product.findMany extends (...args: any[]) => Promise<Array<infer U>> ? U : any> = [];
+    try {
+      matchingProducts = await prisma.product.findMany({
+        where: { name: { contains: rawTrimmed, mode: "insensitive" } },
+        take: 1,
+      });
+    } catch {
+      // Database not reachable or offline; proceed
+    }
 
     if (matchingProducts.length > 0) {
       const match = matchingProducts[0];

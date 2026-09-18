@@ -457,10 +457,6 @@ export class MarketResearchService {
       }
     }
 
-    const prices = observations.map(o => o.price);
-    const capturedDates = observations.map(o => o.capturedAt);
-    const priceTypes = observations.map(o => o.priceType);
-
     const sources = Array.from(new Set(observations.map(o => o.source)));
     const latestObservationAt = observations.length > 0
       ? new Date(Math.max(...observations.map(o => new Date(o.capturedAt).getTime())))

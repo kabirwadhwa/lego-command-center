@@ -372,7 +372,7 @@ export class ProductIdentificationService {
     }
 
     // 9. Textual Product Name Search in Local Catalog
-    let matchingProducts: Array<typeof prisma.product.findMany extends (...args: any[]) => Promise<Array<infer U>> ? U : any> = [];
+    let matchingProducts: Awaited<ReturnType<typeof prisma.product.findMany>> = [];
     try {
       matchingProducts = await prisma.product.findMany({
         where: { name: { contains: rawTrimmed, mode: "insensitive" } },

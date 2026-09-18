@@ -238,76 +238,128 @@ export class CatawikiScraperService {
     telemetry.requestExecuted = true;
 
     // Log safely without token
-    console.log(`[CatawikiScraper] provider=CATAWIKI actor=${actorId} query="${cleanId}" queries=[${queries.join(", ")}] request started`);
+    console.log(`[CatawikiScraper] provider=CATAWIKI query="${cleanId}" queries=[${queries.join(", ")}] request started`);
 
     try {
-      const isSolidCode = actorId.toLowerCase().includes("solidcode");
-      const requestBody = isSolidCode
-        ? {
-            searchQueries: queries,
-            maxResults: params.maxItems || 20,
-            language: "en",
-          }
-        : {
-            urls: searchUrls,
-            max_page: 1,
-          };
+      const allRawItems: RawApifyLotItem[] = [];
 
-      const res = await fetch(
-        `https://api.apify.com/v2/acts/${encodeURIComponent(actorId)}/run-sync-get-dataset-items?token=${apifyToken}&timeout=90`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(requestBody),
+      // Step 1: Discover Completed / Sold Lots via Google Search Scraper
+      const googleQuery = `site:catawiki.com/en/l/ "${cleanId}" LEGO`;
+      console.log(`[CatawikiScraper] Step 1: Discovering completed lots via Google: ${googleQuery}`);
+
+      let candidateLotUrls: string[] = [];
+      try {
+        const googleRes = await fetch(
+          `https://api.apify.com/v2/acts/apify~google-search-scraper/run-sync-get-dataset-items?token=${apifyToken}&timeout=45`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              queries: googleQuery,
+              maxPagesPerQuery: 1,
+              resultsPerPage: 10,
+            }),
+          }
+        );
+
+        if (googleRes.status === 401 || googleRes.status === 403) {
+          telemetry.status = "AUTH_FAILED";
+          telemetry.errorCode = `HTTP_${googleRes.status}`;
+          telemetry.errorMessage = "Apify authentication failed. Invalid APIFY_API_TOKEN.";
+          console.warn(`[CatawikiScraper] Apify authentication failed (HTTP ${googleRes.status}).`);
+          return { lots: [], telemetry };
         }
-      );
+
+        if (googleRes.ok) {
+          const googleData = await googleRes.json();
+          if (Array.isArray(googleData) && googleData[0]?.organicResults) {
+            const organics = googleData[0].organicResults as Array<{ url?: string; title?: string; description?: string }>;
+            const escaped = cleanId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+            const idRegex = new RegExp(`(?:^|[^0-9A-Za-z])${escaped}(?:[^0-9A-Za-z]|$)`, "i");
+
+            for (const org of organics) {
+              if (!org.url) continue;
+              const matchesCw = /catawiki\.(?:com|nl|fr|de|be|it|es)\/(?:[a-z]{2}\/)?l\/([0-9]+)/i.test(org.url);
+              const text = `${org.title || ""} ${org.url} ${org.description || ""}`;
+              if (matchesCw && idRegex.test(text)) {
+                candidateLotUrls.push(org.url);
+              }
+            }
+          }
+        }
+      } catch (gErr) {
+        console.warn(`[CatawikiScraper] Google search discovery warning for ${cleanId}:`, gErr);
+      }
+
+      candidateLotUrls = Array.from(new Set(candidateLotUrls)).slice(0, 8);
+      console.log(`[CatawikiScraper] Found ${candidateLotUrls.length} candidate completed lot URLs for ${cleanId}:`, candidateLotUrls);
+
+      // Step 2: Extract Completed Lot Details via scrapesage~catawiki-scraper
+      if (candidateLotUrls.length > 0) {
+        try {
+          const scrapeRes = await fetch(
+            `https://api.apify.com/v2/acts/scrapesage~catawiki-scraper/run-sync-get-dataset-items?token=${apifyToken}&timeout=60`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                lotUrls: candidateLotUrls,
+              }),
+            }
+          );
+
+          if (scrapeRes.ok) {
+            const scrapedItems = await scrapeRes.json();
+            if (Array.isArray(scrapedItems)) {
+              allRawItems.push(...scrapedItems);
+            }
+          } else {
+            console.warn(`[CatawikiScraper] scrapesage returned HTTP ${scrapeRes.status}`);
+          }
+        } catch (sErr) {
+          console.warn(`[CatawikiScraper] scrapesage lot extraction error for ${cleanId}:`, sErr);
+        }
+      }
+
+      // Step 3: If no completed lots retrieved, check solidcode~catawiki-scraper for active lots
+      if (allRawItems.length === 0) {
+        try {
+          console.log(`[CatawikiScraper] Step 3: Checking solidcode~catawiki-scraper for active lots for ${cleanId}`);
+          const solidRes = await fetch(
+            `https://api.apify.com/v2/acts/solidcode~catawiki-scraper/run-sync-get-dataset-items?token=${apifyToken}&timeout=45`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                searchQueries: queries,
+                maxResults: params.maxItems || 10,
+                language: "en",
+              }),
+            }
+          );
+
+          if (solidRes.ok) {
+            const solidItems = await solidRes.json();
+            if (Array.isArray(solidItems)) {
+              allRawItems.push(...solidItems);
+            }
+          }
+        } catch (scErr) {
+          console.warn(`[CatawikiScraper] solidcode scraper error for ${cleanId}:`, scErr);
+        }
+      }
 
       telemetry.durationMs = Date.now() - startTime;
-      telemetry.responseStatus = res.status;
-
-      if (res.status === 401 || res.status === 403) {
-        telemetry.status = "AUTH_FAILED";
-        telemetry.errorCode = `HTTP_${res.status}`;
-        telemetry.errorMessage = "Apify authentication failed. Invalid APIFY_API_TOKEN.";
-        console.warn(`[CatawikiScraper] Apify authentication failed (HTTP ${res.status}).`);
-        return { lots: [], telemetry };
-      }
-
-      if (res.status === 408 || res.status === 504) {
-        telemetry.status = "TIMEOUT";
-        telemetry.errorCode = "TIMEOUT";
-        telemetry.errorMessage = "Apify scraper request timed out after 90 seconds.";
-        console.warn(`[CatawikiScraper] Apify scraper timed out for ${cleanId}.`);
-        return { lots: [], telemetry };
-      }
-
-      if (!res.ok) {
-        telemetry.status = "PROVIDER_FAILED";
-        telemetry.errorCode = `HTTP_${res.status}`;
-        telemetry.errorMessage = `Apify API returned HTTP ${res.status}: ${await res.text().catch(() => "")}`;
-        console.warn(`[CatawikiScraper] Apify API error: HTTP ${res.status}`);
-        return { lots: [], telemetry };
-      }
-
       telemetry.requestSuccessful = true;
-      const rawItems = (await res.json()) as RawApifyLotItem[];
+      telemetry.rawResultCount = allRawItems.length;
 
-      if (!Array.isArray(rawItems)) {
-        telemetry.status = "PARSE_FAILED";
-        telemetry.errorCode = "INVALID_RESPONSE_FORMAT";
-        telemetry.errorMessage = "Apify response was not a JSON array of items.";
-        return { lots: [], telemetry };
-      }
-
-      telemetry.rawResultCount = rawItems.length;
-
-      if (rawItems.length === 0) {
+      if (allRawItems.length === 0) {
         telemetry.status = "LIVE_NO_MATCHES";
-        console.log(`[CatawikiScraper] Apify search returned 0 items for ${cleanId}.`);
+        console.log(`[CatawikiScraper] Search returned 0 items for ${cleanId}.`);
         return { lots: [], telemetry };
       }
 
-      const parsed = this.parseApifyDatasetWithTelemetry(rawItems, cleanId, params.productName, actorId);
+      const parsed = this.parseApifyDatasetWithTelemetry(allRawItems, cleanId, params.productName, "scrapesage~catawiki-scraper");
       telemetry.acceptedResultCount = parsed.acceptedCount;
       telemetry.rejectedResultCount = parsed.rejectedCount;
       telemetry.rejectionReasonCounts = parsed.rejectionReasonCounts;
@@ -318,7 +370,7 @@ export class CatawikiScraperService {
         console.log(`[CatawikiScraper] Successfully accepted ${parsed.lots.length} genuine lots (rejected ${parsed.rejectedCount}) for ${cleanId}.`);
       } else {
         telemetry.status = "RESULTS_REJECTED";
-        console.warn(`[CatawikiScraper] All ${rawItems.length} raw results for ${cleanId} were rejected during validation.`);
+        console.warn(`[CatawikiScraper] All ${allRawItems.length} raw results for ${cleanId} were rejected during validation.`);
       }
 
       return { lots: parsed.lots, telemetry };
@@ -375,7 +427,13 @@ export class CatawikiScraperService {
     const rejectionDetails: Array<{ title?: string; url?: string; reason: CatawikiRejectionReason; detail?: string }> = [];
 
     for (const item of items) {
-      const rawTitle = String(item.title || item.name || "").trim();
+      const rawTitle = String(
+        item.title ||
+        item.name ||
+        (typeof item.specs === "object" && item.specs !== null && (item.specs as Record<string, string>)["Set name"]) ||
+        (typeof item.specs === "object" && item.specs !== null && (item.specs as Record<string, string>)["Set Name"]) ||
+        ""
+      ).trim();
       const rawUrl = item.url || item.lot_url || item.lotUrl;
 
       // 1. Missing required title
@@ -396,7 +454,9 @@ export class CatawikiScraperService {
 
       // 3. Price parsing and validation
       let rawPrice: unknown;
-      if (typeof item.currentBidValue === "number") {
+      if (typeof item.currentBidEUR === "number") {
+        rawPrice = item.currentBidEUR;
+      } else if (typeof item.currentBidValue === "number") {
         rawPrice = item.currentBidValue;
       } else if (typeof item.currentBid === "object" && item.currentBid !== null && "EUR" in item.currentBid) {
         rawPrice = (item.currentBid as { EUR?: number }).EUR;
@@ -474,11 +534,12 @@ export class CatawikiScraperService {
       }
 
       // 8. Sale type resolution
-      const isClosed = Boolean(item.is_closed || item.isClosed || item.status === "closed" || item.closeStatus === "closed" || item.sold_price || item.soldPrice);
-      const isBiddingOpen = Boolean(item.status === "bidding_open" || item.status === "open" || item.status === "live" || item.closeStatus === "open" || item.currentBidValue || item.current_bid || item.currentBid);
+      const isSold = Boolean(item.sold || item.sold_price || item.soldPrice);
+      const isClosed = Boolean(item.closed || item.is_closed || item.isClosed || item.status === "closed" || item.closeStatus === "closed" || item.closeStatus === "Closed" || item.sold_price || item.soldPrice);
+      const isBiddingOpen = Boolean(item.open || item.status === "bidding_open" || item.status === "open" || item.status === "live" || item.status === "open_now" || item.closeStatus === "open" || item.closeStatus === "Open");
 
       let priceType: PriceType;
-      if (isClosed && (item.sold_price || item.soldPrice)) {
+      if (isClosed && isSold) {
         priceType = PriceType.SOLD_PRICE;
       } else if (isBiddingOpen || item.bids?.length) {
         priceType = PriceType.CURRENT_BID;
@@ -488,13 +549,47 @@ export class CatawikiScraperService {
         priceType = PriceType.CURRENT_BID;
       }
 
-      // Shipping cost parsing
-      const rawShipping = item.shipping_fee ?? item.shippingFee ?? item.shipping;
-      const parsedShipping = rawShipping !== undefined && rawShipping !== null ? parseCatawikiPrice(rawShipping) : 15.0;
+      // Shipping cost parsing — strictly no default 15.0
+      let parsedShipping: number | undefined = undefined;
+      if (Array.isArray(item.shippingRates) && item.shippingRates.length > 0) {
+        const preferredRate = item.shippingRates.find(
+          (r: { regionCode?: string; price?: number }) =>
+            r && typeof r.price === "number" && r.price > 0 &&
+            ["be", "de", "fr", "nl", "europe"].includes(String(r.regionCode).toLowerCase())
+        ) || item.shippingRates.find((r: { price?: number }) => r && typeof r.price === "number" && r.price > 0);
+        if (preferredRate && typeof preferredRate.price === "number") {
+          parsedShipping = preferredRate.price;
+        }
+      } else {
+        const rawShipping = item.shipping_fee ?? item.shippingFee ?? item.shipping;
+        if (rawShipping !== undefined && rawShipping !== null) {
+          const parsed = parseCatawikiPrice(rawShipping);
+          if (parsed > 0) parsedShipping = parsed;
+        }
+      }
 
-      // Condition parsing
-      const conditionText = `${item.condition || ""} ${item.subtitle || ""} ${rawTitle}`.toUpperCase();
-      const condition = conditionText.includes("SEALED") || conditionText.includes("MINT") || conditionText.includes("NEW") || conditionText.includes("UNUSED") ? "NEW_SEALED" : "USED_COMPLETE";
+      // Condition parsing — strictly no default USED_COMPLETE
+      const specs = (typeof item.specs === "object" && item.specs !== null) ? (item.specs as Record<string, string>) : {};
+      const conditionText = `${specs.Condition || item.condition || ""} ${specs["Complete set"] ? "Complete: " + specs["Complete set"] : ""} ${item.subtitle || ""} ${rawTitle}`.toUpperCase();
+
+      let condition = "UNKNOWN";
+      if (
+        specs.Condition?.toUpperCase() === "NEW" ||
+        conditionText.includes("SEALED") ||
+        conditionText.includes("MINT") ||
+        conditionText.includes("NEW") ||
+        conditionText.includes("UNUSED") ||
+        conditionText.includes("MISB") ||
+        conditionText.includes("BNIB")
+      ) {
+        condition = "NEW_SEALED";
+      } else if (specs["Complete set"] === "No" || conditionText.includes("INCOMPLETE")) {
+        condition = "USED_INCOMPLETE";
+      } else if (specs["Complete set"] === "Yes" || conditionText.includes("COMPLETE")) {
+        condition = "USED_COMPLETE";
+      } else if (specs.Condition?.toUpperCase() === "USED" || conditionText.includes("USED") || conditionText.includes("PRE-OWNED")) {
+        condition = "USED_UNKNOWN";
+      }
 
       const listingId = String(item.id || item.lot_id || item.lotId || (externalUrl ? `cw-${externalUrl}` : `cw-${Date.now()}-${lots.length}`));
 

@@ -87,3 +87,29 @@ export function isGenuineListingUrl(url: string | null | undefined): boolean {
   }
   return true;
 }
+
+export interface ValuationObservableRecord extends ObservableRecord {
+  priceType?: string | null;
+  saleType?: string | null;
+}
+
+/**
+ * Strict valuation evidence gate:
+ * Enforces the non-negotiable rule: REAL COMPLETED SALE OR NO VALUATION EVIDENCE.
+ * Valuation evidence count, median, range, recommended price, and confidence MUST be derived
+ * exclusively from genuine COMPLETED / SOLD sales.
+ * Current bids, active auctions, estimates, and asking prices are strictly rejected.
+ */
+export function isValuationEligibleEvidence(
+  observation: ValuationObservableRecord | null | undefined
+): boolean {
+  if (!isEligibleForRealMarketPricing(observation)) {
+    return false;
+  }
+  const pt = String(observation?.priceType || "").trim().toUpperCase();
+  const st = String(observation?.saleType || "").trim().toUpperCase();
+
+  // Strictly completed / sold sales only
+  return pt === "SOLD_PRICE" || st === "SOLD";
+}
+

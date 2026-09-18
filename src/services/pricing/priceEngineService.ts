@@ -9,6 +9,7 @@ import {
 } from "./feeService";
 import {
   isEligibleForRealMarketPricing,
+  isValuationEligibleEvidence,
   GENUINE_PROVENANCES,
   isGenuineListingUrl,
 } from "./evidenceEligibility";
@@ -22,6 +23,7 @@ export {
 };
 export {
   isEligibleForRealMarketPricing,
+  isValuationEligibleEvidence,
   GENUINE_PROVENANCES,
   isGenuineListingUrl,
 };
@@ -302,7 +304,7 @@ export class PriceEngineService {
       },
       orderBy: { capturedAt: "desc" }
     });
-    let snapshots = rawSnapshots.filter(isEligibleForRealMarketPricing);
+    let snapshots = rawSnapshots.filter(isValuationEligibleEvidence);
 
     // If fewer than 2 genuine observations, trigger fresh scrape
     if (snapshots.length < 2) {
@@ -315,7 +317,7 @@ export class PriceEngineService {
         },
         orderBy: { capturedAt: "desc" }
       });
-      snapshots = rawSnapshots.filter(isEligibleForRealMarketPricing);
+      snapshots = rawSnapshots.filter(isValuationEligibleEvidence);
     }
 
     // If STILL fewer than 2 observations, return insufficient evidence state

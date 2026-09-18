@@ -882,12 +882,12 @@ export default function PricingManager({
               </span>
             </div>
             <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Evidence Count</span>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Valuation Evidence</span>
               <span className="text-sm font-bold text-white block mt-1">
-                {activeResearch.observationCount} genuine
+                {activeResearch.soldObservationCount} completed {activeResearch.soldObservationCount === 1 ? "sale" : "sales"}
               </span>
               <span className="text-[9px] text-slate-500 block">
-                {activeResearch.observationCount === 0 ? "0 genuine observations found" : `${activeResearch.soldObservationCount} sold · ${activeResearch.askingObservationCount + activeResearch.currentBidObservationCount} active`}
+                {activeResearch.soldObservationCount === 0 ? "0 completed sales" : `${activeResearch.soldObservationCount} verified sold · ${activeResearch.currentBidObservationCount} active bids`}
               </span>
             </div>
             <div className="bg-slate-950 p-3.5 rounded-xl border border-slate-800">
@@ -1050,101 +1050,179 @@ export default function PricingManager({
             )}
           </div>
 
-          {/* Market Evidence Table */}
-          <div className="space-y-3 pt-2">
-            <div className="flex items-center justify-between">
-              <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
-                <span>📋</span> Market Evidence ({activeResearch.observations.length} Observations)
-              </h4>
-              <span className="text-[10px] text-slate-500">Synthetic observations strictly excluded</span>
-            </div>
-
+          {/* Market Evidence: Completed Sales vs Active Auctions */}
+          <div className="space-y-6 pt-2">
             {(() => {
               const isPart = activeResearch.resolvedProduct?.identifierType === "LEGO_PART";
               const displayedObs = activeResearch.observations.filter(
                 obs => selectedColorFilter === null || obs.color === selectedColorFilter || (selectedColorFilter === "Standard / Unspecified" && !obs.color)
               );
 
-              if (activeResearch.observations.length === 0) {
-                return (
-                  <div className="p-8 text-center bg-slate-950 rounded-xl border border-slate-800 text-xs text-slate-400">
-                    {activeResearch.message || "No genuine market observations found across configured sources."}
-                  </div>
-                );
-              }
+              const soldObs = displayedObs.filter(o => o.priceType === "SOLD_PRICE");
+              const activeObs = displayedObs.filter(o => o.priceType !== "SOLD_PRICE");
 
               return (
-                <div className="border border-slate-800 rounded-xl overflow-x-auto bg-slate-950">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-slate-900/90 text-slate-400 uppercase text-[10px] font-bold border-b border-slate-800 tracking-wider">
-                      <tr>
-                        <th className="py-2.5 px-3">Source</th>
-                        <th className="py-2.5 px-3">Type</th>
-                        <th className="py-2.5 px-3 text-right">Price</th>
-                        {isPart && <th className="py-2.5 px-3">Color</th>}
-                        <th className="py-2.5 px-3">Condition</th>
-                        <th className="py-2.5 px-3">Seller</th>
-                        <th className="py-2.5 px-3">Captured</th>
-                        <th className="py-2.5 px-3">Provenance</th>
-                        <th className="py-2.5 px-3 text-right">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-850 text-slate-300">
-                      {displayedObs.map((obs) => (
-                        <tr key={obs.id} className="hover:bg-slate-900/60 transition-colors">
-                          <td className="py-2.5 px-3 font-semibold text-white">{obs.source}</td>
-                          <td className="py-2.5 px-3">
-                            <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase ${
-                              obs.priceType === "SOLD_PRICE"
-                                ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/30"
-                                : obs.priceType === "CURRENT_BID"
-                                ? "bg-amber-500/10 text-amber-400 border border-amber-500/30"
-                                : "bg-blue-500/10 text-blue-400 border border-blue-500/30"
-                            }`}>
-                              {obs.priceType.replace("_", " ")}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3 text-right font-mono font-bold text-white">
-                            {fmt(obs.price)}
-                          </td>
-                          {isPart && (
-                            <td className="py-2.5 px-3 text-purple-300 text-[11px] font-medium">
-                              {obs.color || "Standard"}
-                            </td>
-                          )}
-                          <td className="py-2.5 px-3 text-slate-400 text-[11px]">
-                            {obs.condition ? obs.condition.replace("_", " ") : "N/A"}
-                          </td>
-                          <td className="py-2.5 px-3 text-slate-400 text-[11px] truncate max-w-[140px]">
-                            {obs.seller && !obs.seller.toLowerCase().includes("simulated") ? obs.seller : "—"}
-                          </td>
-                          <td className="py-2.5 px-3 text-slate-400 text-[11px]">
-                            {new Date(obs.capturedAt).toLocaleDateString([], { month: "short", day: "numeric" })}
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <span className="text-[10px] font-mono text-slate-400 font-semibold">
-                              {obs.provenance}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3 text-right">
-                            {obs.externalUrl && isGenuineListingUrl(obs.externalUrl) ? (
-                              <a
-                                href={obs.externalUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-[10px] font-bold text-blue-400 hover:text-blue-300 underline"
-                              >
-                                View Listing ↗
-                              </a>
-                            ) : (
-                              <span className="text-slate-600 text-[10px]">—</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                <>
+                  {/* Table 1: Verified Completed Sales (Valuation Evidence) */}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <span>✅</span> Verified Completed Sales ({soldObs.length} Comparables)
+                      </h4>
+                      <span className="text-[10px] text-slate-500 font-medium">Exclusively used for valuation & recommended price</span>
+                    </div>
+
+                    {soldObs.length === 0 ? (
+                      <div className="p-6 text-center bg-slate-950 rounded-xl border border-slate-800 text-xs text-slate-400">
+                        {activeResearch.message || "No verified completed sales found on Catawiki for this product. Active bids and estimates are strictly excluded from valuation."}
+                      </div>
+                    ) : (
+                      <div className="border border-slate-800 rounded-xl overflow-x-auto bg-slate-950">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-900/90 text-slate-400 uppercase text-[10px] font-bold border-b border-slate-800 tracking-wider">
+                            <tr>
+                              <th className="py-2.5 px-3">Source</th>
+                              <th className="py-2.5 px-3">Type</th>
+                              <th className="py-2.5 px-3 text-right">Sold Hammer Price</th>
+                              {isPart && <th className="py-2.5 px-3">Color</th>}
+                              <th className="py-2.5 px-3">Condition</th>
+                              <th className="py-2.5 px-3">Seller</th>
+                              <th className="py-2.5 px-3">Date Completed</th>
+                              <th className="py-2.5 px-3">Provenance</th>
+                              <th className="py-2.5 px-3 text-right">Verified Listing</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-850 text-slate-300">
+                            {soldObs.map((obs) => (
+                              <tr key={obs.id} className="hover:bg-slate-900/60 transition-colors">
+                                <td className="py-2.5 px-3 font-semibold text-white">{obs.source}</td>
+                                <td className="py-2.5 px-3">
+                                  <span className="px-2 py-0.5 rounded text-[9px] font-bold uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                                    COMPLETED SALE
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-400 text-sm">
+                                  {fmt(obs.price)}
+                                </td>
+                                {isPart && (
+                                  <td className="py-2.5 px-3 text-purple-300 text-[11px] font-medium">
+                                    {obs.color || "Standard"}
+                                  </td>
+                                )}
+                                <td className="py-2.5 px-3 text-slate-300 text-[11px]">
+                                  {obs.condition ? obs.condition.replace("_", " ") : "N/A"}
+                                </td>
+                                <td className="py-2.5 px-3 text-slate-400 text-[11px] truncate max-w-[140px]">
+                                  {obs.seller && !obs.seller.toLowerCase().includes("simulated") ? obs.seller : "—"}
+                                </td>
+                                <td className="py-2.5 px-3 text-slate-400 text-[11px]">
+                                  {new Date(obs.capturedAt).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}
+                                </td>
+                                <td className="py-2.5 px-3">
+                                  <span className="text-[10px] font-mono text-slate-400 font-semibold">
+                                    {obs.provenance}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3 text-right">
+                                  {obs.externalUrl && isGenuineListingUrl(obs.externalUrl) ? (
+                                    <a
+                                      href={obs.externalUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-[10px] font-bold text-blue-400 hover:text-blue-300 underline"
+                                    >
+                                      View Sale ↗
+                                    </a>
+                                  ) : (
+                                    <span className="text-slate-600 text-[10px]">—</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Table 2: Active Auctions (Informational Only - Strictly Excluded from Valuation) */}
+                  {activeObs.length > 0 && (
+                    <div className="space-y-3 pt-2">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                          <span>⏳</span> Active Catawiki Auctions ({activeObs.length} Lots)
+                        </h4>
+                        <span className="text-[10px] text-amber-500/80 font-medium">Informational only — strictly excluded from valuation metrics</span>
+                      </div>
+
+                      <div className="border border-slate-800 rounded-xl overflow-x-auto bg-slate-950">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-900/90 text-slate-400 uppercase text-[10px] font-bold border-b border-slate-800 tracking-wider">
+                            <tr>
+                              <th className="py-2.5 px-3">Source</th>
+                              <th className="py-2.5 px-3">Type</th>
+                              <th className="py-2.5 px-3 text-right">Current Bid</th>
+                              {isPart && <th className="py-2.5 px-3">Color</th>}
+                              <th className="py-2.5 px-3">Condition</th>
+                              <th className="py-2.5 px-3">Seller</th>
+                              <th className="py-2.5 px-3">Captured</th>
+                              <th className="py-2.5 px-3">Provenance</th>
+                              <th className="py-2.5 px-3 text-right">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-850 text-slate-300">
+                            {activeObs.map((obs) => (
+                              <tr key={obs.id} className="hover:bg-slate-900/60 transition-colors opacity-80">
+                                <td className="py-2.5 px-3 font-semibold text-white">{obs.source}</td>
+                                <td className="py-2.5 px-3">
+                                  <span className="px-2 py-0.5 rounded text-[9px] font-bold uppercase bg-amber-500/10 text-amber-400 border border-amber-500/30">
+                                    {obs.priceType.replace("_", " ")} (NOT USED)
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3 text-right font-mono font-bold text-amber-300">
+                                  {fmt(obs.price)}
+                                </td>
+                                {isPart && (
+                                  <td className="py-2.5 px-3 text-purple-300 text-[11px] font-medium">
+                                    {obs.color || "Standard"}
+                                  </td>
+                                )}
+                                <td className="py-2.5 px-3 text-slate-400 text-[11px]">
+                                  {obs.condition ? obs.condition.replace("_", " ") : "N/A"}
+                                </td>
+                                <td className="py-2.5 px-3 text-slate-400 text-[11px] truncate max-w-[140px]">
+                                  {obs.seller && !obs.seller.toLowerCase().includes("simulated") ? obs.seller : "—"}
+                                </td>
+                                <td className="py-2.5 px-3 text-slate-400 text-[11px]">
+                                  {new Date(obs.capturedAt).toLocaleDateString([], { month: "short", day: "numeric" })}
+                                </td>
+                                <td className="py-2.5 px-3">
+                                  <span className="text-[10px] font-mono text-slate-400 font-semibold">
+                                    {obs.provenance}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3 text-right">
+                                  {obs.externalUrl && isGenuineListingUrl(obs.externalUrl) ? (
+                                    <a
+                                      href={obs.externalUrl}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="text-[10px] font-bold text-blue-400 hover:text-blue-300 underline"
+                                    >
+                                      View Auction ↗
+                                    </a>
+                                  ) : (
+                                    <span className="text-slate-600 text-[10px]">—</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </>
               );
             })()}
           </div>

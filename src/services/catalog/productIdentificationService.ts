@@ -2,6 +2,7 @@ import prisma from "@/lib/prisma";
 import fs from "fs";
 import path from "path";
 import { lookupKnownPart } from "./legoPartsCatalog";
+import { lookupKnownSet } from "./legoSetsCatalog";
 
 export interface SourceReference {
   source: string;
@@ -228,6 +229,24 @@ export class ProductIdentificationService {
       };
     }
 
+    // 6.5 Check Curated Known LEGO Sets Reference (deterministic resolution for sets like 21006, 21036, 75192)
+    const setDef = lookupKnownSet(normalized);
+    if (setDef && !isExplicitPart) {
+      sources.push({ source: "Curated LEGO Sets Catalog", matchedIdentifier: setDef.setNumber, confidence: 0.98 });
+      return {
+        input: rawTrimmed,
+        identifierType: "LEGO_SET",
+        canonicalIdentifier: setDef.setNumber,
+        name: setDef.name,
+        theme: setDef.theme,
+        year: setDef.year || null,
+        imageUrl: setDef.imageUrl || null,
+        ean: null,
+        identificationSources: sources,
+        identificationConfidence: 0.98,
+      };
+    }
+
     // 7. External Rebrickable API (if REBRICKABLE_API_KEY configured)
     if (process.env.REBRICKABLE_API_KEY) {
       const key = process.env.REBRICKABLE_API_KEY;
@@ -321,8 +340,8 @@ export class ProductIdentificationService {
       }
 
       // If user entered digits without explicit prefix and neither catalog confirmed it:
-      // It is ambiguous (could be an obscure part or set).
-      // Truthful representation: UNKNOWN with low/null confidence!
+      // It is ambiguous (could be an obscure part or uncataloged set).
+      // Truthful representation: UNKNOWN with null confidence!
       return {
         input: rawTrimmed,
         identifierType: "UNKNOWN",

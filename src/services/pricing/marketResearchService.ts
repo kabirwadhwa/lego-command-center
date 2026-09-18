@@ -284,6 +284,13 @@ export class MarketResearchService {
     // Invariant: unconditionally filter lots through isEligibleForRealMarketPricing
     const validEvidence = multiResult.combinedEvidence.filter(isEligibleForRealMarketPricing);
 
+    // If forceRefresh, purge existing snapshots for this product to remove contaminated/stale data
+    if (forceRefresh) {
+      await prisma.marketPriceSnapshot.deleteMany({
+        where: { productId },
+      });
+    }
+
     // Persist newly fetched valid evidence into MarketPriceSnapshot
     for (const ev of validEvidence) {
       // Map saleType to PriceType
@@ -454,40 +461,31 @@ export class MarketResearchService {
     const capturedDates = observations.map(o => o.capturedAt);
     const priceTypes = observations.map(o => o.priceType);
 
-    const soldCount = observations.filter(o => o.priceType === PriceType.SOLD_PRICE).length;
-    const askingCount = observations.filter(o => o.priceType === PriceType.ASKING_PRICE || o.priceType === PriceType.BUY_NOW).length;
-    const bidCount = observations.filter(o => o.priceType === PriceType.CURRENT_BID).length;
-
     const sources = Array.from(new Set(observations.map(o => o.source)));
     const latestObservationAt = observations.length > 0
       ? new Date(Math.max(...observations.map(o => new Date(o.capturedAt).getTime())))
       : null;
 
-    // 4. Source Quality Weighting: prioritize sold transactions over asking/auctions
-    let effectivePrices = prices;
-    const soldPrices = observations.filter(o => o.priceType === PriceType.SOLD_PRICE).map(o => o.price);
+    // 4. Valuation Evidence: Strictly completed / sold sales only
+    const soldComparables = observations.filter(o => o.priceType === PriceType.SOLD_PRICE);
+    const activeAuctions = observations.filter(o => o.priceType === PriceType.CURRENT_BID);
+    const askingListings = observations.filter(o => o.priceType === PriceType.ASKING_PRICE || o.priceType === PriceType.BUY_NOW);
 
-    // If we have >= 2 sold transactions, base the median heavily on sold prices
-    if (soldPrices.length >= 2) {
-      effectivePrices = soldPrices;
-    }
+    const soldCount = soldComparables.length;
+    const soldPrices = soldComparables.map(o => o.price);
+    const soldDates = soldComparables.map(o => o.capturedAt);
+    const soldPriceTypes = soldComparables.map(o => o.priceType);
 
-    // 5. Calculate statistical metrics
-    const metrics = PriceEngineService.calculateMetrics(effectivePrices, capturedDates, priceTypes);
+    // 5. Calculate statistical metrics EXCLUSIVELY on completed sold comparables
+    const metrics = PriceEngineService.calculateMetrics(soldPrices, soldDates, soldPriceTypes);
 
-    // Confidence adjustment for source diversity:
-    // If all evidence came from only 1 source or if there are 0 completed sold transactions, cap confidence at MEDIUM
-    let finalConfidenceScore: number | null = metrics.confidenceScore;
-    let finalConfidenceTier = metrics.confidenceTier;
+    let finalConfidenceScore: number | null = soldCount >= 2 ? metrics.confidenceScore : null;
+    let finalConfidenceTier = soldCount >= 2 ? metrics.confidenceTier : "INSUFFICIENT";
 
-    if (observations.length >= 2) {
-      if (sources.length === 1 && soldCount === 0 && finalConfidenceTier === "HIGH") {
-        finalConfidenceTier = "MEDIUM";
-        finalConfidenceScore = Math.min(finalConfidenceScore, 75);
-      }
+    if (soldCount >= 2) {
       if (resolved.identifierType === "UNKNOWN") {
         finalConfidenceTier = "LOW";
-        finalConfidenceScore = Math.min(finalConfidenceScore, 35);
+        finalConfidenceScore = Math.min(finalConfidenceScore ?? 35, 35);
       }
     } else {
       finalConfidenceTier = "INSUFFICIENT";
@@ -495,9 +493,9 @@ export class MarketResearchService {
     }
 
     // 6. Determine recommended market price
-    // Invariant: strictly requires >= 2 genuine market observations
+    // Non-Negotiable Invariant: strictly requires >= 2 verified completed sales
     let recommendedPrice: number | null = null;
-    if (metrics.median > 0 && observations.length >= 2) {
+    if (metrics.median > 0 && soldCount >= 2) {
       recommendedPrice = Math.round((metrics.median * 0.99) * 100) / 100;
     }
 
@@ -540,21 +538,21 @@ export class MarketResearchService {
 
     // 8. Determine status
     let status: ResearchStatus = "SUCCESS";
-    let message = `Research complete with ${observations.length} genuine market observations across ${sources.length} sources.`;
+    let message = `Valuation complete with ${soldCount} verified completed sales.`;
 
     const allConfigured = providerStatuses.filter(p => p.status !== "NOT_CONFIGURED");
 
-    if (observations.length === 0) {
+    if (soldCount === 0) {
       if (allConfigured.length === 0 || (providerStatuses.length > 0 && providerStatuses.every(p => p.status === "NOT_CONFIGURED" || p.status === "FAILED"))) {
         status = "EXTERNAL_SOURCE_FAILURE";
         message = "Live market evidence unavailable: configured market providers failed or unconfigured.";
       } else {
         status = "NO_DATA";
-        message = `No genuine market evidence found across searched sources for ${product.name} (${canonicalId}).`;
+        message = `No completed Catawiki sales found for ${product.name} (${canonicalId}). Active bids are strictly excluded from valuation.`;
       }
-    } else if (observations.length < 2) {
+    } else if (soldCount < 2) {
       status = "INSUFFICIENT_DATA";
-      message = `Insufficient genuine market observations (${observations.length} found). Minimum 2 required for pricing recommendations.`;
+      message = `Insufficient completed sales (${soldCount} verified sale found). Minimum 2 completed sales required for pricing recommendations.`;
     }
 
     // 9. Persist lightweight research history
@@ -567,10 +565,10 @@ export class MarketResearchService {
           theme: product.theme,
           imageUrl: product.imageUrl,
           recommendedPrice: recommendedPrice !== null ? new Prisma.Decimal(recommendedPrice) : null,
-          marketMedian: (metrics.median > 0 && observations.length >= 2) ? new Prisma.Decimal(metrics.median) : null,
-          marketMin: (metrics.min > 0 && observations.length >= 2) ? new Prisma.Decimal(metrics.min) : null,
-          marketMax: (metrics.max > 0 && observations.length >= 2) ? new Prisma.Decimal(metrics.max) : null,
-          observationCount: observations.length,
+          marketMedian: (metrics.median > 0 && soldCount >= 2) ? new Prisma.Decimal(metrics.median) : null,
+          marketMin: (metrics.min > 0 && soldCount >= 2) ? new Prisma.Decimal(metrics.min) : null,
+          marketMax: (metrics.max > 0 && soldCount >= 2) ? new Prisma.Decimal(metrics.max) : null,
+          observationCount: soldCount,
           confidenceScore: finalConfidenceScore,
           confidenceTier: finalConfidenceTier,
           targetChannel,
@@ -605,14 +603,14 @@ export class MarketResearchService {
       resolvedProduct: resolved,
       providerStatuses,
       evidenceByColor: Object.keys(evidenceByColor).length > 0 ? evidenceByColor : undefined,
-      observationCount: observations.length,
+      observationCount: soldCount,
       soldObservationCount: soldCount,
-      askingObservationCount: askingCount,
-      currentBidObservationCount: bidCount,
-      medianPrice: (metrics.median > 0 && observations.length >= 2) ? metrics.median : null,
-      meanPrice: (metrics.mean > 0 && observations.length >= 2) ? metrics.mean : null,
-      minimumObservedPrice: (metrics.min > 0 && observations.length >= 2) ? metrics.min : null,
-      maximumObservedPrice: (metrics.max > 0 && observations.length >= 2) ? metrics.max : null,
+      askingObservationCount: askingListings.length,
+      currentBidObservationCount: activeAuctions.length,
+      medianPrice: (metrics.median > 0 && soldCount >= 2) ? metrics.median : null,
+      meanPrice: (metrics.mean > 0 && soldCount >= 2) ? metrics.mean : null,
+      minimumObservedPrice: (metrics.min > 0 && soldCount >= 2) ? metrics.min : null,
+      maximumObservedPrice: (metrics.max > 0 && soldCount >= 2) ? metrics.max : null,
       confidenceScore: finalConfidenceScore,
       confidenceTier: finalConfidenceTier,
       recommendedMarketPrice: recommendedPrice,

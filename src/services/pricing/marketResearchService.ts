@@ -298,10 +298,15 @@ export class MarketResearchService {
       if (ev.saleType === "SOLD") pType = PriceType.SOLD_PRICE;
       else if (ev.saleType === "AUCTION") pType = PriceType.CURRENT_BID;
 
+      const fingerprint = ev.rawMetadata?.fingerprint ? String(ev.rawMetadata.fingerprint) : null;
+
       const existing = await prisma.marketPriceSnapshot.findFirst({
         where: {
           productId,
-          externalUrl: ev.externalUrl,
+          OR: [
+            { externalUrl: ev.externalUrl },
+            ...(fingerprint ? [{ externalListingId: fingerprint }] : []),
+          ],
         },
       });
 
@@ -316,6 +321,7 @@ export class MarketResearchService {
             shipping: ev.shipping !== null ? new Prisma.Decimal(ev.shipping) : null,
             condition: ev.condition,
             seller: ev.seller,
+            externalListingId: fingerprint,
             externalUrl: ev.externalUrl,
             capturedAt: ev.observedAt || new Date(),
             availability: true,
@@ -326,6 +332,7 @@ export class MarketResearchService {
               productMatchScore: ev.productMatchScore,
               originalPrice: ev.originalPrice,
               originalCurrency: ev.originalCurrency,
+              ...(ev.rawMetadata || {}),
             }),
           },
         });

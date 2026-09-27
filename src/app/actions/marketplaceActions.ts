@@ -931,5 +931,83 @@ export async function testCatawikiDiagnosticsAction(identifier: string) {
   }
 }
 
+/**
+ * Safe diagnostic action for evaluating live BrickLink official API integration.
+ * ADMIN ONLY. Never returns secrets, tokens, or OAuth signatures.
+ */
+export async function testBrickLinkDiagnosticsAction(identifier?: string) {
+  await checkRole([UserRole.ADMIN]);
+
+  const cleanId = (identifier || "10316").trim();
+
+  try {
+    const { ProductIdentificationService } = await import("@/services/catalog/productIdentificationService");
+    const resolved = await ProductIdentificationService.resolveProduct(cleanId);
+
+    const { BrickLinkProvider } = await import("@/services/pricing/providers/bricklinkProvider");
+    const provider = new BrickLinkProvider();
+
+    if (!provider.isConfigured()) {
+      const missing = provider.getMissingCredentials();
+      return {
+        success: true as const,
+        diagnostics: {
+          configured: false,
+          status: "NOT_CONFIGURED",
+          provider: "bricklink",
+          message: `BrickLink API unconfigured: missing required credentials (${missing.join(", ")}).`,
+          missingCredentials: missing,
+          query: cleanId,
+        },
+      };
+    }
+
+    const result = await provider.searchMarket(resolved);
+
+    const sampleAcceptedResults = result.evidence.slice(0, 5).map((ev) => ({
+      title: ev.title,
+      price: ev.price,
+      currency: ev.currency,
+      saleType: ev.saleType,
+      condition: ev.condition,
+      observedAt: ev.observedAt?.toISOString() || null,
+      provenance: ev.provenance,
+      externalUrl: ev.externalUrl,
+      vatIncluded: ev.rawMetadata?.vatIncluded,
+      priceBasis: ev.rawMetadata?.priceBasis,
+    }));
+
+    return {
+      success: true as const,
+      diagnostics: {
+        configured: true,
+        status: result.status,
+        diagnosticStatus: result.diagnosticStatus,
+        provider: "bricklink",
+        query: cleanId,
+        queriesAttempted: result.queriesAttempted,
+        totalObservations: result.evidence.length,
+        soldObservations: result.evidence.filter((e) => e.saleType === "SOLD").length,
+        stockObservations: result.evidence.filter((e) => e.saleType === "ACTIVE_LISTING").length,
+        telemetry: result.telemetry,
+        sampleAcceptedResults,
+      },
+    };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return {
+      success: false as const,
+      error: errorMsg,
+      diagnostics: {
+        configured: false,
+        status: "FAILED",
+        provider: "bricklink",
+        query: cleanId,
+        error: errorMsg,
+      },
+    };
+  }
+}
+
 
 

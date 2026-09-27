@@ -158,11 +158,11 @@ interface PricingManagerProps {
 }
 
 const CHANNELS = [
-  { id: "CATAWIKI", name: "Catawiki Auctions", hasLiveScraper: true, notes: "12.5% fee · Buyer pays shipping" },
-  { id: "SHOPIFY", name: "Shopify Store", hasLiveScraper: false, notes: "2.9% + €0.30 payment fee · Customer shipping" },
-  { id: "BOL", name: "Bol.com Plaza", hasLiveScraper: false, notes: "15% fee + €6.50 postage" },
-  { id: "EBAY", name: "eBay", hasLiveScraper: false, notes: "13.25% + €0.35 fee + €6.50 postage" },
-  { id: "BRICKLINK", name: "BrickLink Store", hasLiveScraper: false, notes: "3% + 2.9% + €0.30 fee" },
+  { id: "CATAWIKI", name: "Catawiki Auctions", sourceType: "Live Scraper", notes: "12.5% fee · Buyer pays shipping" },
+  { id: "SHOPIFY", name: "Shopify Store", sourceType: "Store Inventory", notes: "2.9% + €0.30 payment fee · Customer shipping" },
+  { id: "BOL", name: "Bol.com Plaza", sourceType: "Pricing Economics", notes: "15% fee + €6.50 postage" },
+  { id: "EBAY", name: "eBay", sourceType: "Pricing Economics", notes: "13.25% + €0.35 fee + €6.50 postage" },
+  { id: "BRICKLINK", name: "BrickLink Store", sourceType: "Official API", notes: "3% + 2.9% + €0.30 fee" },
 ];
 
 export default function PricingManager({
@@ -567,7 +567,7 @@ export default function PricingManager({
             >
               {CHANNELS.map((ch) => (
                 <option key={ch.id} value={ch.id}>
-                  {ch.name} ({ch.hasLiveScraper ? "Live Scraper" : "Pricing Economics"})
+                  {ch.name} ({ch.sourceType})
                 </option>
               ))}
             </select>
@@ -609,7 +609,7 @@ export default function PricingManager({
             {[
               { id: "catawiki", name: "Catawiki", defaultStatus: "Apify Scraper" },
               { id: "ebay", name: "eBay", defaultStatus: "Finding API" },
-              { id: "bricklink", name: "BrickLink", defaultStatus: "Price Guide" },
+              { id: "bricklink", name: "BrickLink Price Guide", defaultStatus: "Official API (OAuth 1.0)" },
               { id: "web_search", name: "Web Search", defaultStatus: "Google / Serp / Brave" },
             ].map((prov) => {
               const liveStatus = activeResearch?.providerStatuses?.find(
@@ -633,6 +633,9 @@ export default function PricingManager({
                 badgeStyle = "bg-slate-800 text-slate-400 border border-slate-700";
               } else if (diagStatus === "NOT_CONFIGURED" || status === "NOT_CONFIGURED") {
                 badgeText = "NOT CONFIGURED";
+                badgeStyle = "bg-amber-500/10 text-amber-400 border border-amber-500/30";
+              } else if (diagStatus === "RATE_LIMITED") {
+                badgeText = "RATE LIMITED";
                 badgeStyle = "bg-amber-500/10 text-amber-400 border border-amber-500/30";
               } else if (diagStatus === "AUTH_FAILED") {
                 badgeText = "AUTH FAILED ✕";
@@ -1074,7 +1077,7 @@ export default function PricingManager({
 
                     {soldObs.length === 0 ? (
                       <div className="p-6 text-center bg-slate-950 rounded-xl border border-slate-800 text-xs text-slate-400">
-                        {activeResearch.message || "No verified completed sales found on Catawiki for this product. Active bids and estimates are strictly excluded from valuation."}
+                        {activeResearch.message || "No verified completed sales found on configured marketplaces (Catawiki, BrickLink) for this product. Active bids and asking prices are strictly excluded from valuation."}
                       </div>
                     ) : (
                       <div className="border border-slate-800 rounded-xl overflow-x-auto bg-slate-950">
@@ -1145,12 +1148,12 @@ export default function PricingManager({
                     )}
                   </div>
 
-                  {/* Table 2: Active Auctions (Informational Only - Strictly Excluded from Valuation) */}
+                  {/* Table 2: Active Market Evidence & Current Stock (Informational Only - Strictly Excluded from Valuation) */}
                   {activeObs.length > 0 && (
                     <div className="space-y-3 pt-2">
                       <div className="flex items-center justify-between">
                         <h4 className="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
-                          <span>⏳</span> Active Catawiki Auctions ({activeObs.length} Lots)
+                          <span>⏳</span> Active Market Evidence & Current Stock ({activeObs.length} Listings)
                         </h4>
                         <span className="text-[10px] text-amber-500/80 font-medium">Informational only — strictly excluded from valuation metrics</span>
                       </div>
@@ -1161,7 +1164,7 @@ export default function PricingManager({
                             <tr>
                               <th className="py-2.5 px-3">Source</th>
                               <th className="py-2.5 px-3">Type</th>
-                              <th className="py-2.5 px-3 text-right">Current Bid</th>
+                              <th className="py-2.5 px-3 text-right">Current Bid / Asking</th>
                               {isPart && <th className="py-2.5 px-3">Color</th>}
                               <th className="py-2.5 px-3">Condition</th>
                               <th className="py-2.5 px-3">Seller</th>

@@ -10,20 +10,32 @@ export class BrickLinkProvider implements IMarketResearchProvider {
   isConfigured(): boolean {
     return !!(
       process.env.BRICKLINK_CONSUMER_KEY &&
-      process.env.BRICKLINK_CONSUMER_SECRET
+      process.env.BRICKLINK_CONSUMER_SECRET &&
+      process.env.BRICKLINK_TOKEN_VALUE &&
+      process.env.BRICKLINK_TOKEN_SECRET
     );
+  }
+
+  getMissingCredentials(): string[] {
+    const missing: string[] = [];
+    if (!process.env.BRICKLINK_CONSUMER_KEY) missing.push("BRICKLINK_CONSUMER_KEY");
+    if (!process.env.BRICKLINK_CONSUMER_SECRET) missing.push("BRICKLINK_CONSUMER_SECRET");
+    if (!process.env.BRICKLINK_TOKEN_VALUE) missing.push("BRICKLINK_TOKEN_VALUE");
+    if (!process.env.BRICKLINK_TOKEN_SECRET) missing.push("BRICKLINK_TOKEN_SECRET");
+    return missing;
   }
 
   async searchMarket(
     product: ResolvedLegoProduct
   ): Promise<ProviderResult> {
     if (!this.isConfigured()) {
+      const missing = this.getMissingCredentials();
       return {
         providerId: this.id,
         providerName: this.name,
         status: "NOT_CONFIGURED",
         evidence: [],
-        error: "BrickLink unconfigured: BRICKLINK_CONSUMER_KEY & BRICKLINK_CONSUMER_SECRET are missing.",
+        error: `BrickLink unconfigured: missing credentials (${missing.join(", ")}).`,
       };
     }
 
@@ -78,7 +90,7 @@ export class BrickLinkProvider implements IMarketResearchProvider {
           price: unitPrice,
           currency: data?.data?.currency_code || "EUR",
           saleType: "SOLD",
-          seller: "BrickLink Verified Order",
+          seller: null,
           externalUrl,
           observedAt: entry.date_ordered ? new Date(entry.date_ordered) : new Date(),
           canonicalIdentifier: product.canonicalIdentifier,

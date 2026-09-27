@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "jest --runInBand",
     "test:live:shopify": "jest tests/shopify_live.test.ts --runInBand",
+    "test:live:bricklink": "jest tests/bricklink_live.test.ts --runInBand",
     "worker": "ts-node src/worker.ts"
   },
   "dependencies": {

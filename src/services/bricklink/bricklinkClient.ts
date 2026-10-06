@@ -114,7 +114,8 @@ export function mapToBrickLinkItem(
 ): { itemNo: string; itemType: BrickLinkItemType } {
   const clean = identifier.trim();
   const isPart = identifierType === "LEGO_PART";
-  const itemType: BrickLinkItemType = isPart ? "PART" : "SET";
+  const isMinifig = identifierType === "LEGO_MINIFIG" || /^[a-z]{2,5}\d{3,5}[a-z]?$/i.test(clean);
+  const itemType: BrickLinkItemType = isMinifig ? "MINIFIG" : isPart ? "PART" : "SET";
 
   if (itemType === "SET") {
     // If already has -<variant>, keep it, otherwise append -1
@@ -122,7 +123,7 @@ export function mapToBrickLinkItem(
     return { itemNo, itemType };
   }
 
-  // LEGO_PART: design ID without suffix
+  // LEGO_PART or MINIFIG: design / minifig ID without -1 suffix
   const itemNo = clean.replace(/-[0-9]+$/, "");
   return { itemNo, itemType };
 }

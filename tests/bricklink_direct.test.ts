@@ -379,5 +379,45 @@ describe("BrickLink Direct Client & Workaround Tests", () => {
       expect(stockEvidence[0].condition).toBe("NEW_SEALED");
       expect(stockEvidence[0].rawMetadata?.sellerCountryCode).toBe("DE");
     });
+
+    it("correctly identifies and formats BrickLink minifigure queries (e.g. sw0001a)", async () => {
+      const { ProductIdentificationService } = await import(
+        "../src/services/catalog/productIdentificationService"
+      );
+      const resolved = await ProductIdentificationService.resolveProduct("sw0001a");
+      expect(resolved.identifierType).toBe("LEGO_MINIFIG");
+      expect(resolved.canonicalIdentifier).toBe("sw0001a");
+
+      const mockDirectClient = {
+        getFullPriceGuideData: jest.fn().mockResolvedValue({
+          item: {
+            idItem: 54486,
+            itemNo: "sw0001a",
+            itemName: "Battle Droid",
+            itemType: "MINIFIG",
+            newQty: 10,
+            usedQty: 50,
+          },
+          soldNewSummary: { minPrice: 1.5, avgPrice: 2.0, qtyAvgPrice: 1.9, maxPrice: 3.5, unitQuantity: 10, totalQuantity: 15 },
+          soldUsedSummary: { minPrice: 0.8, avgPrice: 1.2, qtyAvgPrice: 1.1, maxPrice: 2.0, unitQuantity: 20, totalQuantity: 30 },
+          stockNewSummary: { minPrice: 1.8, avgPrice: 2.2, qtyAvgPrice: 2.1, maxPrice: 4.0, unitQuantity: 15, totalQuantity: 25 },
+          stockUsedSummary: { minPrice: 0.9, avgPrice: 1.3, qtyAvgPrice: 1.2, maxPrice: 2.5, unitQuantity: 25, totalQuantity: 40 },
+          soldTransactions: [
+            { quantity: 1, unitPrice: 2.1, currency: "EUR", condition: "N", dateOrdered: new Date("2026-09-15") },
+          ],
+          activeListings: [
+            { idInv: 99999, unitPrice: 2.5, currency: "EUR", codeNew: "N", sellerUsername: "DroidShop", countryCode: "FR" },
+          ],
+        }),
+      } as unknown as BrickLinkDirectClient;
+
+      const provider = new BrickLinkProvider(undefined, mockDirectClient);
+      const result = await provider.searchMarket(resolved);
+
+      expect(result.status).toBe("SUCCESS");
+      expect(result.evidence).toHaveLength(2);
+      expect(result.evidence[0].title).toContain("LEGO Minifig sw0001a");
+      expect(result.evidence[0].externalUrl).toContain("catalogitem.page?M=sw0001a");
+    });
   });
 });

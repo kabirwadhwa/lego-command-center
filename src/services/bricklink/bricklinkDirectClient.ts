@@ -304,11 +304,15 @@ export class BrickLinkDirectClient {
 
     const parseTransactions = (innerHtml: string | undefined, condition: "N" | "U") => {
       if (!innerHtml) return;
-      const rows = [...innerHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)];
+      const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+      let m: RegExpExecArray | null;
       let currentMonthDate: Date | null = null;
+      let count = 0;
+      const maxTransactionsPerCondition = 100;
 
-      for (const r of rows) {
-        const content = r[1];
+      while ((m = rowRegex.exec(innerHtml)) !== null) {
+        if (count >= maxTransactionsPerCondition) break;
+        const content = m[1];
         // Check for month header: class="pcipgSubHeader"><b>September 2026</b>
         const mHeader = content.match(/class=["']?pcipgSubHeader["']?[^>]*><b>([^<]+)<\/b>/i);
         if (mHeader) {
@@ -342,6 +346,7 @@ export class BrickLinkDirectClient {
               condition,
               dateOrdered: currentMonthDate || new Date(),
             });
+            count++;
           }
         }
       }

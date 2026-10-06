@@ -140,8 +140,10 @@ export class BrickLinkProvider implements IMarketResearchProvider {
       };
     }
 
-    // 2. Reject unsupported/unknown identifiers
-    if (product.identifierType === "UNKNOWN" || !product.canonicalIdentifier) {
+    // 2. Reject unsupported/unknown identifiers for official OAuth API
+    // For direct workaround mode, searchproduct.ajax resolves arbitrary catalog items automatically.
+    const effectiveIdentifier = product.canonicalIdentifier || product.input;
+    if (!effectiveIdentifier || (product.identifierType === "UNKNOWN" && this.isOfficialOAuthConfigured())) {
       return {
         providerId: this.id,
         providerName: this.name,
@@ -154,7 +156,7 @@ export class BrickLinkProvider implements IMarketResearchProvider {
 
     // 3. Map identifier to canonical BrickLink item number
     const { itemNo, itemType } = mapToBrickLinkItem(
-      product.canonicalIdentifier,
+      effectiveIdentifier,
       product.identifierType
     );
 
@@ -253,6 +255,9 @@ export class BrickLinkProvider implements IMarketResearchProvider {
       };
 
       const candidateEvidenceList: MarketEvidence[] = [];
+      const resolvedTypeKey = data.item.itemType === "PART" ? "P" : data.item.itemType === "MINIFIG" ? "M" : "S";
+      const resolvedCatalogUrl = `https://www.bricklink.com/v2/catalog/catalogitem.page?${resolvedTypeKey}=${data.item.itemNo}`;
+      const itemCategoryLabel = data.item.itemType === "PART" ? "Part" : data.item.itemType === "MINIFIG" ? "Minifig" : "Set";
 
       // 1. Process genuine completed sales transactions (6-month sales history)
       for (const t of data.soldTransactions) {
@@ -266,13 +271,13 @@ export class BrickLinkProvider implements IMarketResearchProvider {
           dateOrdered: t.dateOrdered,
         });
 
-        const externalUrl = `${catalogBaseUrl}#sale=${fingerprint}`;
+        const externalUrl = `${resolvedCatalogUrl}#sale=${fingerprint}`;
         const internalCondition = t.condition === "N" ? "NEW_SEALED" : "USED_COMPLETE";
 
         const candidate = EvidenceValidator.validateCandidate({
           provider: this.id,
           marketplace: "BRICKLINK",
-          title: `LEGO ${data.item.itemType === "PART" ? "Part" : "Set"} ${product.canonicalIdentifier} - BrickLink Sold (${t.condition === "N" ? "New" : "Used"}): ${data.item.itemName || product.canonicalIdentifier}`,
+          title: `LEGO ${itemCategoryLabel} ${data.item.itemNo} - BrickLink Sold (${t.condition === "N" ? "New" : "Used"}): ${data.item.itemName || product.canonicalIdentifier}`,
           price: t.unitPrice,
           currency: t.currency || "EUR",
           saleType: "SOLD",
@@ -307,12 +312,12 @@ export class BrickLinkProvider implements IMarketResearchProvider {
       // 2. Process genuine active stock listings
       for (const l of data.activeListings) {
         const internalCondition = l.codeNew === "N" ? "NEW_SEALED" : "USED_COMPLETE";
-        const externalUrl = `${catalogBaseUrl}#inv=${l.idInv}`;
+        const externalUrl = `${resolvedCatalogUrl}#inv=${l.idInv}`;
 
         const candidate = EvidenceValidator.validateCandidate({
           provider: this.id,
           marketplace: "BRICKLINK",
-          title: `LEGO ${data.item.itemType === "PART" ? "Part" : "Set"} ${product.canonicalIdentifier} - BrickLink Stock (${l.codeNew === "N" ? "New" : "Used"}): ${data.item.itemName || product.canonicalIdentifier}`,
+          title: `LEGO ${itemCategoryLabel} ${data.item.itemNo} - BrickLink Stock (${l.codeNew === "N" ? "New" : "Used"}): ${data.item.itemName || product.canonicalIdentifier}`,
           price: l.unitPrice,
           currency: l.currency || "EUR",
           saleType: "ACTIVE_LISTING",

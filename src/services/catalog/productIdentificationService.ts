@@ -14,6 +14,7 @@ export interface SourceReference {
 export type LegoIdentifierType =
   | "LEGO_SET"
   | "LEGO_PART"
+  | "LEGO_MINIFIG"
   | "INTERNAL_SKU"
   | "EAN"
   | "UNKNOWN";
@@ -69,7 +70,7 @@ export class ProductIdentificationService {
   static normalizeIdentifier(raw: string): string {
     if (!raw) return "";
     let clean = raw.trim();
-    clean = clean.replace(/^(?:LEGO|SET|PART|DESIGN|ELEMENT|SKU|EAN|LGO)[-_\s:]+/i, "");
+    clean = clean.replace(/^(?:LEGO|SET|PART|DESIGN|ELEMENT|SKU|EAN|LGO|FIG|MINIFIG|MINIFIGURE)[-_\s:]+/i, "");
     clean = clean.replace(/-[0-9]+$/, ""); // Strip trailing "-1" Bricklink/Rebrickable set suffix
     return clean.trim();
   }
@@ -102,6 +103,7 @@ export class ProductIdentificationService {
     // 1. Explicit Prefix Classification
     const upperRaw = rawTrimmed.toUpperCase();
     const isExplicitPart = /^(?:PART|DESIGN|ELEMENT)[-_\s:]+/i.test(upperRaw);
+    const isExplicitMinifig = /^(?:MINIFIG|FIG|MINIFIGURE)[-_\s:]+/i.test(upperRaw);
     const isExplicitSet = /^(?:SET)[-_\s:]+/i.test(upperRaw);
     const isExplicitSku = /^(?:SKU|LGO|INV)[-_\s:]+/i.test(upperRaw) || /-(?:NEW|USED|DAMAGED)$/i.test(upperRaw);
 
@@ -175,6 +177,23 @@ export class ProductIdentificationService {
           identificationConfidence: 1.0,
         };
       }
+    }
+
+    // 3.5 Check for Minifigure Pattern (e.g. sw0001a, sw0004, col001, sh001, hp001, cas001)
+    if (isExplicitMinifig || (!isExplicitSet && !isExplicitPart && /^[a-zA-Z]{2,5}\d{3,5}[a-zA-Z0-9]?$/i.test(normalized))) {
+      sources.push({ source: "Minifigure Identifier Detector", matchedIdentifier: normalized, confidence: 0.90 });
+      return {
+        input: rawTrimmed,
+        identifierType: "LEGO_MINIFIG",
+        canonicalIdentifier: normalized,
+        name: `LEGO Minifigure ${normalized}`,
+        theme: "Minifigures",
+        year: null,
+        imageUrl: null,
+        ean: null,
+        identificationSources: sources,
+        identificationConfidence: 0.90,
+      };
     }
 
     // 4. Check Curated Known LEGO Parts Reference (deterministic resolution for parts like 35106)

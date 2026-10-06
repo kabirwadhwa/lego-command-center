@@ -91,7 +91,7 @@ interface ProviderResultUI {
 
 interface ResolvedProductUI {
   input: string;
-  identifierType: "LEGO_SET" | "LEGO_PART" | "INTERNAL_SKU" | "EAN" | "UNKNOWN";
+  identifierType: "LEGO_SET" | "LEGO_PART" | "LEGO_MINIFIG" | "INTERNAL_SKU" | "EAN" | "UNKNOWN";
   canonicalIdentifier: string;
   name: string | null;
   theme: string | null;
@@ -767,6 +767,10 @@ export default function PricingManager({
                   {activeResearch.resolvedProduct?.identifierType === "LEGO_PART" ? (
                     <span className="px-2.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-500/15 text-purple-400 border border-purple-500/30">
                       Detected: LEGO PART
+                    </span>
+                  ) : activeResearch.resolvedProduct?.identifierType === "LEGO_MINIFIG" ? (
+                    <span className="px-2.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                      Detected: MINIFIGURE
                     </span>
                   ) : activeResearch.resolvedProduct?.identifierType === "INTERNAL_SKU" ? (
                     <span className="px-2.5 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">

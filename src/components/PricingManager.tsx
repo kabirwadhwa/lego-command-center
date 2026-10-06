@@ -162,7 +162,7 @@ const CHANNELS = [
   { id: "SHOPIFY", name: "Shopify Store", sourceType: "Store Inventory", notes: "2.9% + €0.30 payment fee · Customer shipping" },
   { id: "BOL", name: "Bol.com Plaza", sourceType: "Pricing Economics", notes: "15% fee + €6.50 postage" },
   { id: "EBAY", name: "eBay", sourceType: "Pricing Economics", notes: "13.25% + €0.35 fee + €6.50 postage" },
-  { id: "BRICKLINK", name: "BrickLink Store", sourceType: "Official API", notes: "3% + 2.9% + €0.30 fee" },
+  { id: "BRICKLINK", name: "BrickLink Store", sourceType: "Catalog & Price Guide", notes: "3% + 2.9% + €0.30 fee" },
 ];
 
 export default function PricingManager({
@@ -609,7 +609,7 @@ export default function PricingManager({
             {[
               { id: "catawiki", name: "Catawiki", defaultStatus: "Apify Scraper" },
               { id: "ebay", name: "eBay", defaultStatus: "Finding API" },
-              { id: "bricklink", name: "BrickLink Price Guide", defaultStatus: "Official API (OAuth 1.0)" },
+              { id: "bricklink", name: "BrickLink Price Guide", defaultStatus: "Price Guide & Market Data" },
               { id: "web_search", name: "Web Search", defaultStatus: "Google / Serp / Brave" },
             ].map((prov) => {
               const liveStatus = activeResearch?.providerStatuses?.find(

@@ -75,3 +75,23 @@ The official BrickLink Store API also supports store management operations:
 - Inbound inventory alerts & notifications
 
 These store inventory operations are scheduled for **Phase 2**. This milestone completes **Market Pricing Intelligence**.
+
+---
+
+## 5. BrickLink Pricing Workaround (Zero-Simulation Direct Endpoints)
+
+Due to official Store API approval bottlenecks (store ownership requirement), a production workaround was implemented in [`src/services/bricklink/bricklinkDirectClient.ts`](../src/services/bricklink/bricklinkDirectClient.ts) and integrated into [`src/services/pricing/providers/bricklinkProvider.ts`](../src/services/pricing/providers/bricklinkProvider.ts):
+
+### Architecture & Discovery
+1. **Catalog Resolution**: `https://www.bricklink.com/ajax/clone/search/searchproduct.ajax?q={query}`
+   - Resolves set/part numbers to internal BrickLink `idItem` and retrieves instant summary min/max and quantity statistics.
+2. **6-Month Completed Sales Price Guide**: `https://www.bricklink.com/v2/catalog/catalogitem_pgtab.page?idItem={idItem}&currency=2`
+   - Bypasses AWS WAF challenges present on legacy `.asp` pages.
+   - Extracts complete 6-month sales summary tables (New/Used min, avg, qty-avg, max, sold count) AND all individual historical sold order rows with quantities and sold prices.
+3. **Live Active Stock Listings**: `https://www.bricklink.com/ajax/clone/catalogifs.ajax?itemid={idItem}&cond=N&rpp=50`
+   - Extracts live active listings with real inventory IDs (`idInv`), prices, condition codes, seller names, and country codes.
+4. **Dual-Mode Priority**:
+   - If official OAuth credentials exist, the official Store API client runs.
+   - Otherwise, the direct workaround client runs automatically without requiring credentials.
+   - In both modes, `ObservationProvenance.LIVE_API` or `ObservationProvenance.LIVE_SCRAPE` is faithfully recorded, and ex-VAT semantics are strictly maintained.
+

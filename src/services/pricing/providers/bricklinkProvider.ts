@@ -11,6 +11,10 @@ import {
   BrickLinkPriceGuideResult,
   mapToBrickLinkItem,
 } from "@/services/bricklink/bricklinkClient";
+import {
+  BrickLinkDirectClient,
+  BrickLinkDirectPriceGuideData,
+} from "@/services/bricklink/bricklinkDirectClient";
 
 export interface BrickLinkAggregateReport {
   itemNo: string;
@@ -93,12 +97,22 @@ export class BrickLinkProvider implements IMarketResearchProvider {
   id = "bricklink";
   name = "BrickLink Marketplace";
   private client: BrickLinkClient;
+  private directClient: BrickLinkDirectClient;
 
-  constructor(customClient?: BrickLinkClient) {
+  constructor(customClient?: BrickLinkClient, customDirectClient?: BrickLinkDirectClient) {
     this.client = customClient || new BrickLinkClient();
+    this.directClient = customDirectClient || new BrickLinkDirectClient();
   }
 
   isConfigured(): boolean {
+    if (process.env.BRICKLINK_DISABLED === "true") {
+      return false;
+    }
+    // Fully operational either via official OAuth or via direct price guide workaround
+    return true;
+  }
+
+  isOfficialOAuthConfigured(): boolean {
     return this.client.isConfigured();
   }
 
@@ -111,18 +125,16 @@ export class BrickLinkProvider implements IMarketResearchProvider {
   ): Promise<ProviderResult> {
     const startTime = Date.now();
 
-    // 1. Truthful configuration check
+    // 1. Check configuration
     if (!this.isConfigured()) {
-      const missing = this.getMissingCredentials();
       return {
         providerId: this.id,
         providerName: this.name,
         status: "NOT_CONFIGURED",
         evidence: [],
-        error: `BrickLink API unconfigured: missing required credentials (${missing.join(", ")}).`,
+        error: "BrickLink provider explicitly disabled via BRICKLINK_DISABLED.",
         telemetry: {
           configured: false,
-          missingCredentials: missing,
           provider: this.id,
         },
       };
@@ -146,15 +158,260 @@ export class BrickLinkProvider implements IMarketResearchProvider {
       product.identifierType
     );
 
-    const catalogTypeKey = itemType === "PART" ? "P" : "S";
+    const catalogTypeKey = itemType === "PART" ? "P" : itemType === "MINIFIG" ? "M" : "S";
     const catalogBaseUrl = `https://www.bricklink.com/v2/catalog/catalogitem.page?${catalogTypeKey}=${itemNo}`;
+
+    // Prefer official OAuth client if fully configured; otherwise execute direct price guide client
+    if (this.isOfficialOAuthConfigured()) {
+      return this.searchMarketViaOfficialApi(product, itemNo, itemType, catalogBaseUrl, startTime);
+    } else {
+      return this.searchMarketViaDirectWorkaround(product, itemNo, itemType, catalogBaseUrl, startTime);
+    }
+  }
+
+  /**
+   * Workaround execution branch: extracts real BrickLink market data directly via internal catalog/PG endpoints.
+   */
+  private async searchMarketViaDirectWorkaround(
+    product: ResolvedLegoProduct,
+    itemNo: string,
+    itemType: BrickLinkItemType,
+    catalogBaseUrl: string,
+    startTime: number
+  ): Promise<ProviderResult> {
+    const queriesAttempted = [
+      `BrickLink Catalog: ${itemType} ${itemNo} (Direct Catalog API)`,
+      `BrickLink Price Guide: catalogitem_pgtab.page?idItem={idItem}&currency=2 (EUR)`,
+      `BrickLink Stock Listings: catalogifs.ajax?itemid={idItem}`,
+    ];
+
+    try {
+      const data: BrickLinkDirectPriceGuideData | null = await this.directClient.getFullPriceGuideData(
+        product.canonicalIdentifier,
+        itemType,
+        "EUR"
+      );
+
+      if (!data) {
+        return {
+          providerId: this.id,
+          providerName: this.name,
+          status: "NO_MATCHES",
+          evidence: [],
+          diagnosticStatus: "ITEM_NOT_FOUND",
+          queriesAttempted,
+          telemetry: {
+            itemChecked: itemNo,
+            itemType,
+            authMode: "DIRECT_PRICE_GUIDE_WORKAROUND",
+            existsInCatalog: false,
+            durationMs: Date.now() - startTime,
+          },
+        };
+      }
+
+      const aggregateReport: BrickLinkAggregateReport = {
+        itemNo: data.item.itemNo,
+        itemType: data.item.itemType,
+        currency: "EUR",
+        soldNew: {
+          min: data.soldNewSummary.minPrice,
+          avg: data.soldNewSummary.avgPrice,
+          qtyAvg: data.soldNewSummary.qtyAvgPrice,
+          max: data.soldNewSummary.maxPrice,
+          unitQty: data.soldNewSummary.unitQuantity,
+          totalQty: data.soldNewSummary.totalQuantity,
+          detailCount: data.soldTransactions.filter((t) => t.condition === "N").length,
+        },
+        soldUsed: {
+          min: data.soldUsedSummary.minPrice,
+          avg: data.soldUsedSummary.avgPrice,
+          qtyAvg: data.soldUsedSummary.qtyAvgPrice,
+          max: data.soldUsedSummary.maxPrice,
+          unitQty: data.soldUsedSummary.unitQuantity,
+          totalQty: data.soldUsedSummary.totalQuantity,
+          detailCount: data.soldTransactions.filter((t) => t.condition === "U").length,
+        },
+        stockNew: {
+          min: data.stockNewSummary.minPrice,
+          avg: data.stockNewSummary.avgPrice,
+          qtyAvg: data.stockNewSummary.qtyAvgPrice,
+          max: data.stockNewSummary.maxPrice,
+          unitQty: data.stockNewSummary.unitQuantity,
+          totalQty: data.stockNewSummary.totalQuantity,
+          detailCount: data.activeListings.filter((l) => l.codeNew === "N").length,
+        },
+        stockUsed: {
+          min: data.stockUsedSummary.minPrice,
+          avg: data.stockUsedSummary.avgPrice,
+          qtyAvg: data.stockUsedSummary.qtyAvgPrice,
+          max: data.stockUsedSummary.maxPrice,
+          unitQty: data.stockUsedSummary.unitQuantity,
+          totalQty: data.stockUsedSummary.totalQuantity,
+          detailCount: data.activeListings.filter((l) => l.codeNew === "U").length,
+        },
+      };
+
+      const candidateEvidenceList: MarketEvidence[] = [];
+
+      // 1. Process genuine completed sales transactions (6-month sales history)
+      for (const t of data.soldTransactions) {
+        const fingerprint = generateBrickLinkObservationFingerprint({
+          itemType: data.item.itemType,
+          itemNo: data.item.itemNo,
+          guideType: "sold",
+          condition: t.condition,
+          unitPrice: t.unitPrice,
+          quantity: t.quantity,
+          dateOrdered: t.dateOrdered,
+        });
+
+        const externalUrl = `${catalogBaseUrl}#sale=${fingerprint}`;
+        const internalCondition = t.condition === "N" ? "NEW_SEALED" : "USED_COMPLETE";
+
+        const candidate = EvidenceValidator.validateCandidate({
+          provider: this.id,
+          marketplace: "BRICKLINK",
+          title: `LEGO ${data.item.itemType === "PART" ? "Part" : "Set"} ${product.canonicalIdentifier} - BrickLink Sold (${t.condition === "N" ? "New" : "Used"}): ${data.item.itemName || product.canonicalIdentifier}`,
+          price: t.unitPrice,
+          currency: t.currency || "EUR",
+          saleType: "SOLD",
+          seller: null, // Strictly null; no fabricated seller identity
+          externalUrl,
+          observedAt: t.dateOrdered,
+          canonicalIdentifier: product.canonicalIdentifier,
+          productName: data.item.itemName || product.name,
+          condition: internalCondition,
+          provenance: ObservationProvenance.LIVE_SCRAPE,
+          rawMetadata: {
+            fingerprint,
+            bricklinkItemNo: data.item.itemNo,
+            bricklinkItemType: data.item.itemType,
+            guideType: "sold",
+            bricklinkCondition: t.condition,
+            internalCondition,
+            quantity: t.quantity,
+            vatIncluded: false,
+            priceBasis: "EX_VAT_BRICKLINK_PRICE_GUIDE",
+            urlGranularity: "CATALOG_PRICE_GUIDE",
+            sourceMode: "DIRECT_PRICE_GUIDE_WORKAROUND",
+            summaryStats: t.condition === "N" ? aggregateReport.soldNew : aggregateReport.soldUsed,
+          },
+        });
+
+        if (candidate) {
+          candidateEvidenceList.push(candidate);
+        }
+      }
+
+      // 2. Process genuine active stock listings
+      for (const l of data.activeListings) {
+        const internalCondition = l.codeNew === "N" ? "NEW_SEALED" : "USED_COMPLETE";
+        const externalUrl = `${catalogBaseUrl}#inv=${l.idInv}`;
+
+        const candidate = EvidenceValidator.validateCandidate({
+          provider: this.id,
+          marketplace: "BRICKLINK",
+          title: `LEGO ${data.item.itemType === "PART" ? "Part" : "Set"} ${product.canonicalIdentifier} - BrickLink Stock (${l.codeNew === "N" ? "New" : "Used"}): ${data.item.itemName || product.canonicalIdentifier}`,
+          price: l.unitPrice,
+          currency: l.currency || "EUR",
+          saleType: "ACTIVE_LISTING",
+          seller: l.storeName || l.sellerUsername || null,
+          externalUrl,
+          observedAt: new Date(),
+          canonicalIdentifier: product.canonicalIdentifier,
+          productName: data.item.itemName || product.name,
+          condition: internalCondition,
+          provenance: ObservationProvenance.LIVE_SCRAPE,
+          rawMetadata: {
+            idInv: l.idInv,
+            storeName: l.storeName,
+            sellerUsername: l.sellerUsername,
+            sellerFeedbackScore: l.sellerFeedbackScore,
+            sellerCountryCode: l.sellerCountryCode,
+            description: l.description,
+            codeComplete: l.codeComplete,
+            bricklinkItemNo: data.item.itemNo,
+            bricklinkItemType: data.item.itemType,
+            guideType: "stock",
+            bricklinkCondition: l.codeNew,
+            internalCondition,
+            quantity: l.quantity,
+            vatIncluded: false,
+            priceBasis: "EX_VAT_BRICKLINK_PRICE_GUIDE",
+            urlGranularity: "CATALOG_PRICE_GUIDE",
+            sourceMode: "DIRECT_PRICE_GUIDE_WORKAROUND",
+            summaryStats: l.codeNew === "N" ? aggregateReport.stockNew : aggregateReport.stockUsed,
+          },
+        });
+
+        if (candidate) {
+          candidateEvidenceList.push(candidate);
+        }
+      }
+
+      const durationMs = Date.now() - startTime;
+      const status = candidateEvidenceList.length > 0 ? "SUCCESS" : "NO_MATCHES";
+
+      return {
+        providerId: this.id,
+        providerName: this.name,
+        status,
+        diagnosticStatus: candidateEvidenceList.length > 0 ? "LIVE_SUCCESS" : "LIVE_NO_MATCHES",
+        evidence: candidateEvidenceList,
+        queriesAttempted,
+        telemetry: {
+          itemChecked: data.item.itemNo,
+          itemType: data.item.itemType,
+          catalogName: data.item.itemName,
+          authMode: "DIRECT_PRICE_GUIDE_WORKAROUND",
+          aggregates: aggregateReport,
+          totalObservations: candidateEvidenceList.length,
+          soldObservations: candidateEvidenceList.filter((e) => e.saleType === "SOLD").length,
+          stockObservations: candidateEvidenceList.filter((e) => e.saleType === "ACTIVE_LISTING").length,
+          durationMs,
+        },
+      };
+    } catch (err: unknown) {
+      const durationMs = Date.now() - startTime;
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[BrickLinkProvider:Direct] Failed querying ${itemNo}:`, err);
+
+      return {
+        providerId: this.id,
+        providerName: this.name,
+        status: "FAILED",
+        diagnosticStatus: "FAILED",
+        evidence: [],
+        error: msg,
+        queriesAttempted,
+        telemetry: {
+          itemChecked: itemNo,
+          itemType,
+          authMode: "DIRECT_PRICE_GUIDE_WORKAROUND",
+          diagnosticStatus: "FAILED",
+          durationMs,
+        },
+      };
+    }
+  }
+
+  /**
+   * Official API execution branch (used when official OAuth credentials are present).
+   */
+  private async searchMarketViaOfficialApi(
+    product: ResolvedLegoProduct,
+    itemNo: string,
+    itemType: BrickLinkItemType,
+    catalogBaseUrl: string,
+    startTime: number
+  ): Promise<ProviderResult> {
     const queriesAttempted = [
       `BrickLink Catalog: ${itemType} ${itemNo}`,
       `BrickLink Price Guide: /items/${itemType}/${itemNo}/price`,
     ];
 
     try {
-      // 4. Verify catalog item existence
       const catalogItem = await this.client.getCatalogItem(itemType, itemNo);
       if (!catalogItem) {
         return {
@@ -167,13 +424,13 @@ export class BrickLinkProvider implements IMarketResearchProvider {
           telemetry: {
             itemChecked: itemNo,
             itemType,
+            authMode: "OFFICIAL_OAUTH",
             existsInCatalog: false,
             durationMs: Date.now() - startTime,
           },
         };
       }
 
-      // 5. Query all 4 price guide modes in parallel
       const modes: { guideType: BrickLinkGuideType; condition: BrickLinkCondition }[] = [
         { guideType: "sold", condition: "N" },
         { guideType: "sold", condition: "U" },
@@ -209,7 +466,6 @@ export class BrickLinkProvider implements IMarketResearchProvider {
         const mode = modes[idx];
         const summary = guideData.summary;
 
-        // Record aggregate statistics for each mode
         const modeStats = {
           min: summary.minPrice,
           avg: summary.avgPrice,
@@ -230,12 +486,10 @@ export class BrickLinkProvider implements IMarketResearchProvider {
           aggregateReport.stockUsed = modeStats;
         }
 
-        // Map internal condition: BrickLink N -> NEW_SEALED, U -> USED_COMPLETE
         const internalCondition = mode.condition === "N" ? "NEW_SEALED" : "USED_COMPLETE";
         const isSold = mode.guideType === "sold";
         const saleType = isSold ? "SOLD" : "ACTIVE_LISTING";
 
-        // Process individual order / stock entries
         for (const entry of guideData.priceDetails) {
           const fingerprint = generateBrickLinkObservationFingerprint({
             itemType,
@@ -249,7 +503,6 @@ export class BrickLinkProvider implements IMarketResearchProvider {
             buyerCountryCode: entry.buyerCountryCode,
           });
 
-          // Specific URL with deterministic fingerprint anchor
           const externalUrl = `${catalogBaseUrl}#sale=${fingerprint}`;
 
           const candidate = EvidenceValidator.validateCandidate({
@@ -259,7 +512,7 @@ export class BrickLinkProvider implements IMarketResearchProvider {
             price: entry.unitPrice,
             currency: summary.currencyCode || "EUR",
             saleType,
-            seller: null, // Strictly null; no fake "BrickLink Verified Order"
+            seller: null,
             externalUrl,
             observedAt: entry.dateOrdered || new Date(),
             canonicalIdentifier: product.canonicalIdentifier,
@@ -280,6 +533,7 @@ export class BrickLinkProvider implements IMarketResearchProvider {
               vatIncluded: false,
               priceBasis: "EX_VAT_BRICKLINK_PRICE_GUIDE",
               urlGranularity: "CATALOG_PRICE_GUIDE",
+              sourceMode: "OFFICIAL_OAUTH",
               summaryStats: modeStats,
             },
           });
@@ -304,10 +558,11 @@ export class BrickLinkProvider implements IMarketResearchProvider {
           itemChecked: itemNo,
           itemType,
           catalogName: catalogItem.name,
+          authMode: "OFFICIAL_OAUTH",
           aggregates: aggregateReport,
           totalObservations: candidateEvidenceList.length,
-          soldObservations: candidateEvidenceList.filter(e => e.saleType === "SOLD").length,
-          stockObservations: candidateEvidenceList.filter(e => e.saleType === "ACTIVE_LISTING").length,
+          soldObservations: candidateEvidenceList.filter((e) => e.saleType === "SOLD").length,
+          stockObservations: candidateEvidenceList.filter((e) => e.saleType === "ACTIVE_LISTING").length,
           durationMs,
         },
       };
@@ -322,7 +577,7 @@ export class BrickLinkProvider implements IMarketResearchProvider {
         diagStatus = "RATE_LIMITED";
       }
 
-      console.error(`[BrickLinkProvider] Failed querying ${itemNo}:`, err);
+      console.error(`[BrickLinkProvider:Official] Failed querying ${itemNo}:`, err);
 
       return {
         providerId: this.id,
@@ -335,6 +590,7 @@ export class BrickLinkProvider implements IMarketResearchProvider {
         telemetry: {
           itemChecked: itemNo,
           itemType,
+          authMode: "OFFICIAL_OAUTH",
           diagnosticStatus: diagStatus,
           durationMs,
         },

@@ -73,14 +73,14 @@ describe("BrickLink Provider & Official API Client Unit Tests", () => {
   });
 
   describe("Configuration Truthfulness", () => {
-    it("returns false for isConfigured() when any of the 4 secrets are missing", () => {
+    it("returns false for isOfficialOAuthConfigured() when any of the 4 secrets are missing", () => {
       delete process.env.BRICKLINK_CONSUMER_KEY;
       delete process.env.BRICKLINK_CONSUMER_SECRET;
       delete process.env.BRICKLINK_TOKEN_VALUE;
       delete process.env.BRICKLINK_TOKEN_SECRET;
 
       const provider = new BrickLinkProvider();
-      expect(provider.isConfigured()).toBe(false);
+      expect(provider.isOfficialOAuthConfigured()).toBe(false);
       expect(provider.getMissingCredentials()).toEqual([
         "BRICKLINK_CONSUMER_KEY",
         "BRICKLINK_CONSUMER_SECRET",
@@ -89,13 +89,12 @@ describe("BrickLink Provider & Official API Client Unit Tests", () => {
       ]);
     });
 
-    it("returns NOT_CONFIGURED when searchMarket is invoked without credentials", async () => {
-      delete process.env.BRICKLINK_CONSUMER_KEY;
-      delete process.env.BRICKLINK_CONSUMER_SECRET;
-      delete process.env.BRICKLINK_TOKEN_VALUE;
-      delete process.env.BRICKLINK_TOKEN_SECRET;
+    it("returns NOT_CONFIGURED when searchMarket is invoked with BRICKLINK_DISABLED=true", async () => {
+      process.env.BRICKLINK_DISABLED = "true";
 
       const provider = new BrickLinkProvider();
+      expect(provider.isConfigured()).toBe(false);
+
       const product: ResolvedLegoProduct = {
         input: "10316",
         identifierType: "LEGO_SET",
@@ -112,7 +111,9 @@ describe("BrickLink Provider & Official API Client Unit Tests", () => {
       const result = await provider.searchMarket(product);
       expect(result.status).toBe("NOT_CONFIGURED");
       expect(result.evidence).toHaveLength(0);
-      expect(result.error).toContain("missing required credentials");
+      expect(result.error).toContain("explicitly disabled");
+
+      delete process.env.BRICKLINK_DISABLED;
     });
   });
 

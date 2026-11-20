@@ -2,6 +2,7 @@ import prisma from "@/lib/prisma";
 import { checkRole } from "@/lib/auth";
 import { UserRole } from "@prisma/client";
 import PricingManager from "@/components/PricingManager";
+import LotAnalyzer from "@/components/pricing/LotAnalyzer";
 
 export const dynamic = "force-dynamic";
 
@@ -84,18 +85,33 @@ export default async function PricingPage() {
       {/* Title Header */}
       <div className="flex flex-col gap-1 mb-8">
         <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
-          <span>🏷️</span> Pricing Recommendation Engine
+          <span>🏷️</span> Pricing Analysis Engine
         </h1>
         <p className="text-xs text-slate-400 font-medium">
-          Optimize margins and competitive positioning. Accept recommended listings adjustments derived from live marketplace observations.
+          Paste or upload a list of sets and get RRP, retirement status, current value and
+          profit against what was paid — per set and for the lot as a whole.
         </p>
       </div>
 
-      <PricingManager
-        initialRecommendations={mappedRecommendations}
-        initialRecentResearches={recentResearches}
-        userRole={user.role}
-      />
+      <LotAnalyzer />
+
+      {/* The per-channel recommendation engine, unchanged. Collapsed so the
+          bulk analysis above is the default view. */}
+      <details className="mt-10 rounded-xl border border-slate-800 bg-slate-900/40">
+        <summary className="cursor-pointer px-5 py-4 text-sm font-semibold text-white">
+          Per-channel listing recommendations
+          <span className="ml-2 font-normal text-slate-400">
+            — breakeven floors and suggested prices per marketplace, including selling fees
+          </span>
+        </summary>
+        <div className="border-t border-slate-800 p-5">
+          <PricingManager
+            initialRecommendations={mappedRecommendations}
+            initialRecentResearches={recentResearches}
+            userRole={user.role}
+          />
+        </div>
+      </details>
     </main>
   );
 }

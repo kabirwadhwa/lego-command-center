@@ -7,6 +7,8 @@ import {
   parsePct,
   parseCount,
   baseSetNumber,
+  looksLikeBotChallenge,
+  findSetHref,
   Fetcher,
 } from "@/services/pricing/setFacts/brickEconomyClient";
 import {
@@ -198,5 +200,45 @@ describe("fetchSetFacts — failure modes are explicit, never silent zeros", () 
     expect(f.resolutionError).toBeTruthy();
     expect(f.rrp).toBeNull();
     expect(f.currentValueNew).toBeNull();
+  });
+});
+
+describe("bot protection and timeouts are reported, not silently swallowed", () => {
+  const CF_CHALLENGE =
+    "<html><head><title>Just a moment...</title></head><body>" +
+    '<div class="cf-browser-verification">Enable JavaScript and cookies to continue</div>' +
+    "</body></html>";
+
+  it("recognises a Cloudflare challenge, including one served as HTTP 200", () => {
+    expect(looksLikeBotChallenge(403, "<html>Attention Required! | Cloudflare</html>")).toBe(true);
+    expect(looksLikeBotChallenge(503, "")).toBe(true);
+    expect(looksLikeBotChallenge(429, "")).toBe(true);
+    expect(looksLikeBotChallenge(200, CF_CHALLENGE)).toBe(true);
+    expect(looksLikeBotChallenge(200, PAGE_10255)).toBe(false);
+  });
+
+  it("says it was blocked rather than 'not found' when challenged", async () => {
+    const fetcher: Fetcher = async () => ({ ok: false, status: 403, text: CF_CHALLENGE });
+    const f = await fetchSetFacts("10255", fetcher);
+
+    expect(f.resolutionError).toMatch(/blocked by bot protection/i);
+    expect(f.resolutionError).toMatch(/datacenter/i);
+    expect(f.resolutionError).not.toMatch(/not found/i);
+    // Nothing is invented in the process.
+    expect(f.rrp).toBeNull();
+    expect(f.currentValueNew).toBeNull();
+  });
+
+  it("reports a timeout as a timeout", async () => {
+    const fetcher: Fetcher = async () => {
+      throw new Error("The operation was aborted due to timeout");
+    };
+    const f = await fetchSetFacts("10255", fetcher);
+    expect(f.resolutionError).toMatch(/timed out/i);
+  });
+
+  it("findSetHref still requires the set number to match", () => {
+    expect(findSetHref(SEARCH_10255, "10255")).toBe("/set/10255-1/lego-assembly-square");
+    expect(findSetHref(SEARCH_WRONG_SET, "10255")).toBeNull();
   });
 });

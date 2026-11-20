@@ -15,6 +15,7 @@
 
 import { SetFacts, emptyFacts } from "./types";
 import { Fetcher, baseSetNumber, fetchSetFacts } from "./brickEconomyClient";
+import { SET_FACTS_SEED } from "./setFactsSeed";
 
 export interface EvidenceValuation {
   /** Median of real sold observations, in EUR. */
@@ -78,6 +79,15 @@ export async function lookupSet(input: string, options: LookupOptions = {}): Pro
     const hit = cache.get(key);
     if (hit && Date.now() - hit.at < ttl) {
       return { ...hit.facts, input };
+    }
+
+    // Served first: a cache of real catalogue data captured ahead of time.
+    // This is what lets the hosted app return real values even when its
+    // datacenter IP is challenged by the source. The live fetch below still
+    // runs for anything not seeded, and forceRefresh skips the seed entirely.
+    const seeded = SET_FACTS_SEED[key];
+    if (seeded) {
+      return { ...seeded, input };
     }
   }
 

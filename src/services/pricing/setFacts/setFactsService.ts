@@ -177,6 +177,47 @@ export function median(values: number[]): number | null {
  *
  * Imported lazily so the pure analysis path stays free of Prisma.
  */
+/**
+ * Hosts whose pages are actual marketplace listings, so a price on them is a
+ * real transaction or a real asking price.
+ *
+ * This allowlist exists because a general web search also returns valuation
+ * blogs and price-aggregator pages. Those publish their OWN estimates, and
+ * `classifySaleType` marks anything containing the word "sold" as a completed
+ * sale — so a page titled "Real eBay Sold Prices" would otherwise be recorded
+ * as a sold observation and another site's estimate would become our value.
+ * Aggregators are still returned to the research view as references; they are
+ * just not allowed to set a price.
+ */
+export const VALUATION_HOSTS = [
+  "ebay.",
+  "bricklink.com",
+  "catawiki.",
+  "marktplaats.nl",
+  "2dehands.be",
+  "vinted.",
+  "bol.com",
+  "amazon.",
+  "kaufland.",
+  "brickowl.com",
+];
+
+export function isValuationHost(marketplaceOrUrl: string | null | undefined): boolean {
+  if (!marketplaceOrUrl) return false;
+  const s = marketplaceOrUrl.toLowerCase();
+  return VALUATION_HOSTS.some((h) => s.includes(h));
+}
+
+/**
+ * EUR only. The repo's FX table (`FX_RATES_TO_EUR` in evidenceValidator.ts) is
+ * a set of hardcoded constants, so converting a USD listing would import a
+ * stale rate into the client's valuation. The client's own market is EUR, so
+ * non-EUR observations are counted as references rather than priced in.
+ */
+export function isEurObservation(originalCurrency?: string | null): boolean {
+  return !originalCurrency || originalCurrency.toUpperCase() === "EUR";
+}
+
 export function createEvidenceLookup(): EvidenceLookup {
   return async (facts: SetFacts): Promise<EvidenceValuation> => {
     const { MultiSourceProviderOrchestrator } = await import("../providers/providerOrchestrator");
@@ -195,14 +236,17 @@ export function createEvidenceLookup(): EvidenceLookup {
       identificationConfidence: null,
     });
 
-    const sold = result.evidenceByCondition.newSealed.filter(
-      (e) => e.saleType === "SOLD" || e.saleType === "AUCTION"
+    const usable = result.evidenceByCondition.newSealed.filter(
+      (e) =>
+        (e.saleType === "SOLD" || e.saleType === "AUCTION") &&
+        isEurObservation(e.originalCurrency) &&
+        (isValuationHost(e.marketplace) || isValuationHost(e.externalUrl))
     );
 
     return {
-      median: median(sold.map((e) => e.price)),
-      observations: sold.length,
-      marketplaces: [...new Set(sold.map((e) => e.marketplace))].slice(0, 6),
+      median: median(usable.map((e) => e.price)),
+      observations: usable.length,
+      marketplaces: [...new Set(usable.map((e) => e.marketplace))].slice(0, 6),
     };
   };
 }

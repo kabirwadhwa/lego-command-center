@@ -210,12 +210,41 @@ export function baseSetNumber(input: string): string {
 
 export type Fetcher = (url: string) => Promise<{ ok: boolean; status: number; text: string }>;
 
+/** Per-request ceiling. Without one, a stalled request hangs the whole run. */
+export const FETCH_TIMEOUT_MS = 12_000;
+
 const defaultFetcher: Fetcher = async (url: string) => {
   const res = await fetch(url, {
-    headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml" },
+    headers: {
+      "User-Agent": UA,
+      Accept: "text/html,application/xhtml+xml",
+      "Accept-Language": "en-GB,en;q=0.9",
+    },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
   return { ok: res.ok, status: res.status, text: await res.text() };
 };
+
+/**
+ * Detects a bot-protection interstitial rather than the real page.
+ *
+ * BrickEconomy is behind Cloudflare, which challenges datacenter IPs far more
+ * readily than residential ones. A challenge returns HTTP 403/503 (sometimes
+ * even 200) carrying a "Just a moment..." page, which would otherwise parse
+ * as "page structure not recognised" and quietly produce a set with no data.
+ */
+export function looksLikeBotChallenge(status: number, html: string): boolean {
+  if (status === 403 || status === 503 || status === 429) return true;
+  const head = html.slice(0, 4000).toLowerCase();
+  return (
+    head.includes("just a moment") ||
+    head.includes("cf-browser-verification") ||
+    head.includes("cf_chl_opt") ||
+    head.includes("challenge-platform") ||
+    head.includes("enable javascript and cookies to continue") ||
+    head.includes("attention required")
+  );
+}
 
 /**
  * Resolves a set number to its canonical page path.
@@ -225,17 +254,40 @@ const defaultFetcher: Fetcher = async (url: string) => {
  * requested set number; a non-matching first result is treated as unresolved
  * rather than guessed at.
  */
+export interface ResolveOutcome {
+  path: string | null;
+  /** True when bot protection answered instead of the real search page. */
+  blocked: boolean;
+  status: number | null;
+}
+
+export async function resolveSetPathDetailed(
+  setNumber: string,
+  fetcher: Fetcher = defaultFetcher
+): Promise<ResolveOutcome> {
+  const base = baseSetNumber(setNumber);
+  if (!base) return { path: null, blocked: false, status: null };
+
+  const res = await fetcher(`${BASE}/search?query=${encodeURIComponent(base)}`);
+  if (looksLikeBotChallenge(res.status, res.text)) {
+    return { path: null, blocked: true, status: res.status };
+  }
+  if (!res.ok) return { path: null, blocked: false, status: res.status };
+
+  return { path: findSetHref(res.text, base), blocked: false, status: res.status };
+}
+
+/** Back-compat wrapper: the path alone. */
 export async function resolveSetPath(
   setNumber: string,
   fetcher: Fetcher = defaultFetcher
 ): Promise<string | null> {
-  const base = baseSetNumber(setNumber);
-  if (!base) return null;
+  return (await resolveSetPathDetailed(setNumber, fetcher)).path;
+}
 
-  const res = await fetcher(`${BASE}/search?query=${encodeURIComponent(base)}`);
-  if (!res.ok) return null;
-
-  const hrefs = [...res.text.matchAll(/href="(\/set\/[^"]+)"/g)].map((m) => m[1]);
+/** Picks the href whose set number matches, rather than trusting result order. */
+export function findSetHref(html: string, base: string): string | null {
+  const hrefs = [...html.matchAll(/href="(\/set\/[^"]+)"/g)].map((m) => m[1]);
   const seen = new Set<string>();
   for (const href of hrefs) {
     if (seen.has(href)) continue;
@@ -259,18 +311,28 @@ export async function fetchSetFacts(
   const base = baseSetNumber(input);
   const facts = emptyFacts(input, base);
 
-  let path: string | null;
+  let outcome: ResolveOutcome;
   try {
-    path = await resolveSetPath(base, fetcher);
+    outcome = await resolveSetPathDetailed(base, fetcher);
   } catch (err) {
-    facts.resolutionError = `Lookup failed: ${err instanceof Error ? err.message : String(err)}`;
+    const msg = err instanceof Error ? err.message : String(err);
+    facts.resolutionError = /abort|timeout|timed out/i.test(msg)
+      ? `Lookup timed out after ${FETCH_TIMEOUT_MS / 1000}s`
+      : `Lookup failed: ${msg}`;
     return facts;
   }
 
-  if (!path) {
+  if (outcome.blocked) {
+    facts.resolutionError =
+      `Blocked by bot protection (HTTP ${outcome.status}). The source challenges requests ` +
+      `from datacenter IPs, so this works from a browser but not from the server.`;
+    return facts;
+  }
+  if (!outcome.path) {
     facts.resolutionError = "Not found on BrickEconomy";
     return facts;
   }
+  const path = outcome.path;
 
   const url = `${BASE}${path}`;
   facts.sourceUrl = url;
@@ -279,7 +341,16 @@ export async function fetchSetFacts(
   try {
     page = await fetcher(url);
   } catch (err) {
-    facts.resolutionError = `Page fetch failed: ${err instanceof Error ? err.message : String(err)}`;
+    const msg = err instanceof Error ? err.message : String(err);
+    facts.resolutionError = /abort|timeout|timed out/i.test(msg)
+      ? `Page fetch timed out after ${FETCH_TIMEOUT_MS / 1000}s`
+      : `Page fetch failed: ${msg}`;
+    return facts;
+  }
+  if (looksLikeBotChallenge(page.status, page.text)) {
+    facts.resolutionError =
+      `Blocked by bot protection (HTTP ${page.status}). The source challenges requests from ` +
+      `datacenter IPs, so this works from a browser but not from the server.`;
     return facts;
   }
   if (!page.ok) {
